@@ -1,19 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { login, isLoggedIn, getLockoutRemaining } from '../auth'
-import { Btn, Spinner } from '../components/UI'
+import { login, isLoggedIn, getLockoutRemaining, bootstrapSuperAdmin } from '../auth'
+import { Spinner } from '../components/UI'
 
 export default function Login() {
   const navigate = useNavigate()
-  const [passcode, setPasscode] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [shake, setShake] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [bootstrapping, setBootstrapping] = useState(true)
   const [lockRemaining, setLockRemaining] = useState(0)
   const timerRef = useRef(null)
 
   useEffect(() => {
-    if (isLoggedIn()) navigate('/dashboard')
+    if (isLoggedIn()) { navigate('/dashboard'); return }
+    // Bootstrap super admin on first visit
+    bootstrapSuperAdmin().then(() => setBootstrapping(false)).catch(() => setBootstrapping(false))
     const rem = getLockoutRemaining()
     if (rem > 0) startLockCountdown(rem)
     return () => clearInterval(timerRef.current)
@@ -30,37 +34,49 @@ export default function Login() {
     }, 1000)
   }
 
-  function doShake() {
-    setShake(true)
-    setTimeout(() => setShake(false), 400)
-  }
+  function doShake() { setShake(true); setTimeout(() => setShake(false), 400) }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    if (lockRemaining > 0) return
-    setLoading(true)
-    setTimeout(() => {
-      const result = login(passcode)
-      setLoading(false)
-      setPasscode('')
-      if (result.success) {
-        navigate('/dashboard')
-      } else if (result.locked) {
-        startLockCountdown(result.remaining)
-        doShake()
-      } else {
-        doShake()
-        setError(result.attemptsLeft === 3 ? 'Incorrect passcode.' : `Incorrect — ${result.attemptsLeft} attempt${result.attemptsLeft > 1 ? 's' : ''} remaining.`)
-      }
-    }, 200)
+    if (lockRemaining > 0 || loading) return
+    setLoading(true); setError('')
+    const result = await login(email, password)
+    setLoading(false)
+
+    if (result.success) {
+      // Route based on role
+      if (result.user.role === 'usher') navigate('/checkin-select')
+      else navigate('/dashboard')
+    } else if (result.locked) {
+      startLockCountdown(result.remaining)
+      doShake()
+      setPassword('')
+    } else if (result.error) {
+      setError(result.error)
+      doShake()
+      setPassword('')
+    } else {
+      const r = result.attemptsLeft
+      setError(r !== undefined
+        ? (r === 3 ? 'Incorrect email or password.' : `Incorrect — ${r} attempt${r > 1 ? 's' : ''} remaining.`)
+        : 'Incorrect email or password.')
+      doShake()
+      setPassword('')
+    }
   }
 
   const lockMins = Math.floor(lockRemaining / 60000)
   const lockSecs = Math.floor((lockRemaining % 60000) / 1000)
 
+  if (bootstrapping) return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <Spinner dark />
+    </div>
+  )
+
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className={`bg-white border border-slate-200 rounded-lg p-9 w-full max-w-sm shadow-sm transition-transform ${shake ? 'animate-shake' : ''}`}>
+      <div className={`bg-white border border-slate-200 rounded-lg p-9 w-full max-w-sm shadow-sm ${shake ? 'animate-shake' : ''}`}>
         {lockRemaining > 0 ? (
           <div className="text-center">
             <div className="text-5xl mb-4">🔒</div>
@@ -74,25 +90,29 @@ export default function Login() {
         ) : (
           <>
             <div className="text-2xl font-bold text-black mb-1">GatherHQ</div>
-            <div className="text-sm text-slate-500 mb-7">The Elevation Church — Attendance Portal</div>
+            <div className="text-sm text-slate-500 mb-7">The Elevation Church — Sign in to continue</div>
             <form onSubmit={handleSubmit}>
+              <div className="mb-3.5">
+                <label className="block text-sm font-medium text-black mb-1.5">Email</label>
+                <input type="email" value={email} onChange={e => { setEmail(e.target.value); setError('') }}
+                  placeholder="your@email.com" autoFocus required
+                  className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
+              </div>
               <div className="mb-4">
-                <label className="block text-sm font-medium text-black mb-1.5">Passcode</label>
-                <input
-                  type="password"
-                  value={passcode}
-                  onChange={e => { setPasscode(e.target.value); setError('') }}
-                  placeholder="Enter admin passcode"
-                  className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                  autoFocus
-                />
+                <label className="block text-sm font-medium text-black mb-1.5">Password</label>
+                <input type="password" value={password} onChange={e => { setPassword(e.target.value); setError('') }}
+                  placeholder="Enter your password" required
+                  className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
                 {error && <div className="text-red-500 text-xs mt-1.5">{error}</div>}
               </div>
-              <button type="submit" disabled={loading || !passcode}
+              <button type="submit" disabled={loading || !email || !password}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-md py-2.5 text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
                 {loading ? <><Spinner />Signing in...</> : 'Sign In'}
               </button>
             </form>
+            <div className="mt-5 p-3 bg-slate-50 rounded-lg text-xs text-slate-400 text-center">
+              First time? Use the default credentials your admin set up for you.
+            </div>
           </>
         )}
       </div>

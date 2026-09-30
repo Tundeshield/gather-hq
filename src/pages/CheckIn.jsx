@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { db } from '../firebase'
-import { doc, getDoc, updateDoc, addDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore'
+import {
+  doc, getDoc, updateDoc, addDoc, setDoc,
+  collection, query, where, getDocs, serverTimestamp, increment
+} from 'firebase/firestore'
 import { Spinner } from '../components/UI'
 
+// ── FIELD INPUT ────────────────────────────────────────────────
 function FieldInput({ field, value, onChange }) {
   const base = 'w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 bg-white transition-all'
   if (field.type === 'dropdown') {
@@ -13,174 +17,332 @@ function FieldInput({ field, value, onChange }) {
       {opts.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
   }
-  const inputType = field.type === 'phone' ? 'tel' : field.type === 'email' ? 'email' : 'text'
-  return <input type={inputType} className={base} value={value} onChange={e => onChange(e.target.value)} placeholder={field.type === 'phone' ? 'e.g. 08012345678' : field.label} />
+  const t = field.type === 'phone' ? 'tel' : field.type === 'email' ? 'email' : 'text'
+  return <input type={t} className={base} value={value} onChange={e => onChange(e.target.value)}
+    placeholder={field.type === 'phone' ? 'e.g. 08012345678' : field.label} />
 }
 
+// ── WELCOME ANIMATION ──────────────────────────────────────────
+function WelcomeBack({ name }) {
+  return (
+    <div className="text-center py-4 animate-pulse-once">
+      <div className="text-5xl mb-3">👋</div>
+      <div className="text-xl font-bold text-black">Welcome back,</div>
+      <div className="text-2xl font-bold text-blue-600 mt-1">{name}!</div>
+      <div className="text-sm text-slate-400 mt-2">Attendance recorded ✅</div>
+    </div>
+  )
+}
+
+// ── MAIN CHECK-IN ──────────────────────────────────────────────
 export default function CheckIn() {
   const { id } = useParams()
-  const [event, setEvent] = useState(null)
+  // id could be a session id or event id — we handle both
+  const [record, setRecord] = useState(null)  // session or event
+  const [recordType, setRecordType] = useState(null) // 'session' | 'event'
   const [loading, setLoading] = useState(true)
-  const [state, setState] = useState('lookup') // lookup | found | already | success | late
+  const [state, setState] = useState('phone') // phone | welcome | already | newmember | latesuccess | notopen
   const [phone, setPhone] = useState('')
   const [looking, setLooking] = useState(false)
-  const [reg, setReg] = useState(null)
-  const [checkinIn, setCheckingIn] = useState(false)
-  const [lateValues, setLateValues] = useState({})
-  const [lateErrors, setLateErrors] = useState({})
-  const [submittingLate, setSubmittingLate] = useState(false)
+  const [foundMember, setFoundMember] = useState(null)
+  const [newForm, setNewForm] = useState({ name: '', email: '' })
+  const [newErrors, setNewErrors] = useState({})
+  const [submitting, setSubmitting] = useState(false)
+  const [alreadyTime, setAlreadyTime] = useState('')
+  const phoneRef = useRef()
 
-  useEffect(() => {
-    getDoc(doc(db, 'events', id)).then(snap => {
-      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() })
-      setLoading(false)
-    })
-  }, [id])
+  useEffect(() => { loadRecord() }, [id])
+
+  async function loadRecord() {
+    // Try session first, then event
+    let snap = await getDoc(doc(db, 'sessions', id)).catch(() => null)
+    if (snap?.exists()) { setRecord({ id: snap.id, ...snap.data() }); setRecordType('session'); setLoading(false); return }
+    snap = await getDoc(doc(db, 'events', id)).catch(() => null)
+    if (snap?.exists()) { setRecord({ id: snap.id, ...snap.data() }); setRecordType('event'); setLoading(false); return }
+    setLoading(false)
+  }
+
+  useEffect(() => { if (state === 'phone') setTimeout(() => phoneRef.current?.focus(), 100) }, [state])
+
+  function normalizePhone(p) { return p.trim().replace(/[\s\-\+]/g, '') }
 
   async function lookup() {
-    const p = phone.trim().replace(/[\s\-]/g, '')
+    const p = normalizePhone(phone)
     if (!p) return
     setLooking(true)
+
     try {
-      const snap = await getDocs(query(collection(db, 'events', id, 'registrations'), where('phone', '==', p)))
-      if (!snap.empty) {
-        const r = { id: snap.docs[0].id, ...snap.docs[0].data() }
-        setReg(r)
-        setState(r.checkedIn ? 'already' : 'found')
+      if (recordType === 'session') {
+        await handleSessionCheckin(p)
       } else {
-        setState('late')
+        await handleEventCheckin(p)
       }
-    } catch(e) { alert('Network error. Please try again.') }
-    finally { setLooking(false) }
+    } catch(e) {
+      console.error(e)
+      alert('Network error. Please try again.')
+    } finally {
+      setLooking(false)
+    }
   }
 
-  async function doCheckin() {
-    if (!reg) return
-    setCheckingIn(true)
-    try {
-      await updateDoc(doc(db, 'events', id, 'registrations', reg.id), { checkedIn: true, checkedInAt: serverTimestamp() })
-      setState('success')
-      setTimeout(() => { setState('lookup'); setPhone(''); setReg(null) }, 3000)
-    } catch(e) { alert('Check-in failed. Please try again.') }
-    finally { setCheckingIn(false) }
+  // ── SESSION CHECK-IN ────────────────────────────────────────
+  async function handleSessionCheckin(p) {
+    // Check if already checked in today
+    const existingSub = await getDocs(query(
+      collection(db, 'sessions', id, 'submissions'),
+      where('phone', '==', p)
+    ))
+    if (!existingSub.empty) {
+      const sub = existingSub.docs[0].data()
+      const time = sub.createdAt?.toDate?.()?.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) || 'earlier'
+      setAlreadyTime(time)
+      setState('already')
+      setTimeout(() => resetToPhone(), 3000)
+      return
+    }
+
+    // Look up in member directory
+    const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
+    if (!memberSnap.empty) {
+      const member = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
+      setFoundMember(member)
+      // Auto check-in
+      await recordSessionCheckin(p, member.name, member.id)
+      setState('welcome')
+      setTimeout(() => resetToPhone(), 3000)
+    } else {
+      // New person — show short form
+      setFoundMember(null)
+      setState('newmember')
+    }
   }
 
-  async function submitLate() {
-    const p = phone.trim().replace(/[\s\-]/g, '')
-    const fields = event?.fields || []
+  async function recordSessionCheckin(p, name, memberId) {
+    const data = { name: name || '', phone: p }
+    // Add any extra fields from session
+    await addDoc(collection(db, 'sessions', id, 'submissions'), {
+      data, phone: p, createdAt: serverTimestamp()
+    })
+    // Update member stats
+    if (memberId) {
+      await updateDoc(doc(db, 'members', memberId), {
+        lastSeenAt: serverTimestamp(),
+        totalAttendance: increment(1)
+      })
+    }
+  }
+
+  async function submitNewMember() {
     const errs = {}
-    fields.forEach(f => { if (f.required && f.type !== 'phone' && !lateValues[f.id]) errs[f.id] = 'Required' })
-    if (Object.keys(errs).length) { setLateErrors(errs); return }
-    setSubmittingLate(true)
+    if (!newForm.name.trim()) errs.name = 'Name is required'
+    if (Object.keys(errs).length) { setNewErrors(errs); return }
+    const p = normalizePhone(phone)
+    setSubmitting(true)
     try {
-      const data = {}
-      const nameField = fields.find(f => f.label.toLowerCase().includes('name'))
-      fields.forEach(f => {
-        if (f.type === 'phone' || f.label.toLowerCase().includes('phone')) data[f.label] = p
-        else data[f.label] = lateValues[f.id] || ''
+      // Add to member directory
+      const memberRef = await addDoc(collection(db, 'members'), {
+        name: newForm.name.trim(),
+        phone: p,
+        email: newForm.email.trim(),
+        totalAttendance: 1,
+        lastSeenAt: serverTimestamp(),
+        createdAt: serverTimestamp()
       })
-      const name = nameField ? lateValues[nameField.id] || '' : ''
-      await addDoc(collection(db, 'events', id, 'registrations'), {
-        phone: p, name, data, checkedIn: true, checkedInAt: serverTimestamp(), isLateRegistrant: true, createdAt: serverTimestamp()
+      // Record attendance
+      await addDoc(collection(db, 'sessions', id, 'submissions'), {
+        data: { name: newForm.name.trim(), phone: p, email: newForm.email.trim() },
+        phone: p,
+        createdAt: serverTimestamp()
       })
-      setState('success')
-      setTimeout(() => { setState('lookup'); setPhone(''); setLateValues({}) }, 3000)
+      setFoundMember({ name: newForm.name.trim() })
+      setState('welcome')
+      setTimeout(() => resetToPhone(), 3000)
     } catch(e) { alert('Failed. Please try again.') }
-    finally { setSubmittingLate(false) }
+    finally { setSubmitting(false) }
   }
 
-  function reset() { setState('lookup'); setPhone(''); setReg(null); setLateValues({}); setLateErrors({}) }
+  // ── EVENT CHECK-IN ──────────────────────────────────────────
+  async function handleEventCheckin(p) {
+    const regSnap = await getDocs(query(
+      collection(db, 'events', id, 'registrations'),
+      where('phone', '==', p)
+    ))
 
-  if (loading) return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><Spinner /></div>
+    if (!regSnap.empty) {
+      const reg = { id: regSnap.docs[0].id, ...regSnap.docs[0].data() }
+      if (reg.checkedIn) {
+        const time = reg.checkedInAt?.toDate?.()?.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) || 'earlier'
+        setAlreadyTime(time)
+        setState('already')
+        setTimeout(() => resetToPhone(), 3000)
+        return
+      }
+      // Mark checked in
+      await updateDoc(doc(db, 'events', id, 'registrations', reg.id), {
+        checkedIn: true, checkedInAt: serverTimestamp()
+      })
+      setFoundMember({ name: reg.name || 'there' })
+      setState('welcome')
+      setTimeout(() => resetToPhone(), 3000)
+    } else {
+      // Not registered — short form
+      setFoundMember(null)
+      setState('newmember')
+    }
+  }
 
-  if (!event) return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="text-center text-white"><div className="text-4xl mb-3">🔍</div><div className="text-lg font-semibold">Event not found</div></div>
+  async function submitLateEvent() {
+    const errs = {}
+    if (!newForm.name.trim()) errs.name = 'Name is required'
+    if (Object.keys(errs).length) { setNewErrors(errs); return }
+    const p = normalizePhone(phone)
+    setSubmitting(true)
+    try {
+      await addDoc(collection(db, 'events', id, 'registrations'), {
+        phone: p,
+        name: newForm.name.trim(),
+        data: { 'Full Name': newForm.name.trim(), 'Phone Number': p, 'Email Address': newForm.email.trim() },
+        checkedIn: true,
+        checkedInAt: serverTimestamp(),
+        isLateRegistrant: true,
+        createdAt: serverTimestamp()
+      })
+      setFoundMember({ name: newForm.name.trim() })
+      setState('welcome')
+      setTimeout(() => resetToPhone(), 3000)
+    } catch(e) { alert('Failed. Please try again.') }
+    finally { setSubmitting(false) }
+  }
+
+  function resetToPhone() {
+    setState('phone')
+    setPhone('')
+    setFoundMember(null)
+    setNewForm({ name: '', email: '' })
+    setNewErrors({})
+  }
+
+  // ── RENDER ──────────────────────────────────────────────────
+  if (loading) return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+      <Spinner />
     </div>
   )
 
-  if (event.mode !== 'checkin') return (
+  if (!record) return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="text-center text-white"><div className="text-4xl mb-3">🕐</div><div className="text-lg font-semibold">Check-in not open yet</div><div className="text-sm text-white/60 mt-2">Please wait for the organiser to open check-in.</div></div>
+      <div className="text-center text-white">
+        <div className="text-4xl mb-3">🔍</div>
+        <div className="text-lg font-semibold">Not found</div>
+        <div className="text-sm text-white/50 mt-1">Please scan the correct QR code.</div>
+      </div>
+    </div>
+  )
+
+  const isOpen = recordType === 'session'
+    ? record.status === 'active'
+    : record.mode === 'checkin'
+
+  if (!isOpen) return (
+    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+      <div className="text-center text-white">
+        <div className="text-4xl mb-3">🕐</div>
+        <div className="text-lg font-semibold">
+          {recordType === 'session' ? 'Check-in is closed.' : 'Check-in not open yet.'}
+        </div>
+        <div className="text-sm text-white/50 mt-1">Please see an usher.</div>
+      </div>
     </div>
   )
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6">
-      <div className="text-white text-2xl font-bold text-center mb-2">{event.name}</div>
-      <div className="text-white/60 text-sm text-center mb-8">{event.date}{event.venue ? ' · ' + event.venue : ''}</div>
+      {/* Event/Session name */}
+      <div className="text-white text-xl font-bold text-center mb-1">{record.name}</div>
+      <div className="text-white/50 text-sm text-center mb-8">
+        {record.date}{record.venue ? ' · ' + record.venue : ''}
+      </div>
 
-      <div className="bg-white rounded-xl p-7 w-full max-w-sm text-center shadow-2xl">
-        {state === 'lookup' && (
-          <>
-            <div className="text-base font-semibold text-black mb-1">Check In</div>
-            <div className="text-sm text-slate-400 mb-4">Enter your phone number</div>
-            <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && lookup()}
+      {/* Card */}
+      <div className="bg-white rounded-2xl p-7 w-full max-w-sm shadow-2xl min-h-[280px] flex flex-col justify-center">
+
+        {/* Phone lookup */}
+        {state === 'phone' && (
+          <div>
+            <div className="text-base font-semibold text-black mb-1 text-center">Check In</div>
+            <div className="text-sm text-slate-400 mb-5 text-center">Enter your phone number</div>
+            <input
+              ref={phoneRef}
+              type="tel"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !looking && phone.trim() && lookup()}
               placeholder="e.g. 08012345678"
-              className="w-full border border-slate-200 rounded-lg px-3 py-3 text-lg text-center outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 mb-3" autoFocus />
+              className="w-full border border-slate-200 rounded-xl px-4 py-4 text-xl text-center outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 mb-4 font-mono"
+              autoFocus
+            />
             <button onClick={lookup} disabled={looking || !phone.trim()}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-4 text-base font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
               {looking ? <><Spinner />Checking...</> : 'Continue →'}
             </button>
-          </>
+          </div>
         )}
 
-        {state === 'found' && reg && (
-          <>
-            <div className="text-4xl mb-3">✅</div>
-            <div className="text-lg font-bold text-black mb-1">Welcome, {reg.name || 'there'}!</div>
-            <div className="text-sm text-slate-400 mb-5">You're registered. Tap below to check in.</div>
-            <button onClick={doCheckin} disabled={checkinIn}
-              className="w-full bg-green-600 hover:bg-green-700 text-white rounded-lg py-3 font-semibold mb-2 transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
-              {checkinIn ? <><Spinner />Checking in...</> : 'Check In →'}
-            </button>
-            <button onClick={reset} className="w-full border border-slate-200 rounded-lg py-2.5 text-sm text-slate-500 hover:bg-slate-50 transition-colors">Try a different number</button>
-          </>
+        {/* Welcome back */}
+        {state === 'welcome' && foundMember && (
+          <WelcomeBack name={foundMember.name} />
         )}
 
-        {state === 'already' && reg && (
-          <>
+        {/* Already checked in */}
+        {state === 'already' && (
+          <div className="text-center">
             <div className="text-4xl mb-3">⚠️</div>
             <div className="text-lg font-bold text-black mb-1">Already Checked In</div>
-            <div className="text-sm text-slate-400 mb-5">
-              {reg.checkedInAt?.toDate?.()?.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) || 'Earlier today'}
-            </div>
-            <button onClick={reset} className="w-full border border-slate-200 rounded-lg py-2.5 text-sm text-slate-500 hover:bg-slate-50 transition-colors">Try another number</button>
-          </>
+            <div className="text-sm text-slate-400">You checked in at {alreadyTime}</div>
+          </div>
         )}
 
-        {state === 'success' && (
-          <>
-            <div className="text-4xl mb-3">🎉</div>
-            <div className="text-lg font-bold text-black mb-1">Checked In!</div>
-            <div className="text-sm text-slate-400">Welcome! Enjoy the event. 🙏</div>
-            <div className="text-xs text-slate-300 mt-4">Returning to lookup in 3 seconds...</div>
-          </>
-        )}
+        {/* New member short form */}
+        {state === 'newmember' && (
+          <div>
+            <div className="text-base font-semibold text-black mb-1">Welcome! 👋</div>
+            <div className="text-xs text-slate-400 mb-4">First time here? Let us get your name.</div>
 
-        {state === 'late' && (
-          <>
-            <div className="text-left mb-4">
-              <div className="text-base font-semibold text-black mb-1">📋 Complete Registration</div>
-              <div className="text-xs text-slate-400">No prior registration found. Fill in your details to check in.</div>
+            <div className="mb-3">
+              <label className="block text-sm font-medium text-black mb-1">Full Name <span className="text-red-500">*</span></label>
+              <input type="text" value={newForm.name}
+                onChange={e => { setNewForm(p => ({...p, name: e.target.value})); setNewErrors(p => ({...p, name: ''})) }}
+                placeholder="Your full name"
+                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                autoFocus
+              />
+              {newErrors.name && <div className="text-red-500 text-xs mt-1">{newErrors.name}</div>}
             </div>
-            {(event.fields || []).filter(f => f.type !== 'phone' && !f.label.toLowerCase().includes('phone')).map(f => (
-              <div key={f.id} className="mb-3 text-left">
-                <label className="block text-sm font-medium text-black mb-1">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</label>
-                <FieldInput field={f} value={lateValues[f.id] || ''} onChange={v => { setLateValues(p => ({...p, [f.id]: v})); setLateErrors(p => ({...p, [f.id]: ''})) }} />
-                {lateErrors[f.id] && <div className="text-red-500 text-xs mt-0.5">{lateErrors[f.id]}</div>}
-              </div>
-            ))}
-            <button onClick={submitLate} disabled={submittingLate}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 font-semibold mb-2 transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
-              {submittingLate ? <><Spinner />Checking in...</> : 'Check In →'}
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-black mb-1">Email <span className="text-slate-400 font-normal text-xs">(optional)</span></label>
+              <input type="email" value={newForm.email}
+                onChange={e => setNewForm(p => ({...p, email: e.target.value}))}
+                placeholder="your@email.com"
+                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+
+            <button onClick={recordType === 'session' ? submitNewMember : submitLateEvent}
+              disabled={submitting}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3 text-base font-semibold transition-colors flex items-center justify-center gap-2 mb-2 disabled:opacity-60">
+              {submitting ? <><Spinner />Saving...</> : 'Check In →'}
             </button>
-            <button onClick={reset} className="w-full border border-slate-200 rounded-lg py-2.5 text-sm text-slate-500 hover:bg-slate-50 transition-colors">← Back</button>
-          </>
+            <button onClick={resetToPhone}
+              className="w-full border border-slate-200 rounded-lg py-2.5 text-sm text-slate-500 hover:bg-slate-50 transition-colors">
+              ← Back
+            </button>
+          </div>
         )}
       </div>
+
       <div className="text-white/20 text-xs mt-6">Powered by GatherHQ</div>
+      <style>{`@keyframes pulse-once{0%{opacity:0;transform:scale(.9)}50%{opacity:1;transform:scale(1.02)}100%{transform:scale(1)}}.animate-pulse-once{animation:pulse-once .4s ease}`}</style>
     </div>
   )
 }
