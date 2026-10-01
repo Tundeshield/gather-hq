@@ -5,6 +5,7 @@ import {
   doc, query, orderBy, serverTimestamp, where
 } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
+import { normalizePhone } from '../utils'
 import { Btn, IconBtn, Badge, Input, Select, EmptyState, Spinner } from '../components/UI'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -33,37 +34,41 @@ function InitialAvatar({ name, size = 'md' }) {
   return <div className={`${sz} ${color} rounded-full flex items-center justify-center text-white font-semibold flex-shrink-0`}>{initials}</div>
 }
 
-// ── IMPORT MODAL ──────────────────────────────────────────────
-function ImportModal({ show, onClose, onImported }) {
+function ImportModal({ show, onClose, onImported, title = 'Import Members from Excel', requiredFields = ['name','phone'], optionalFields = ['email','sex','unit'] }) {
   const toast = useToast()
   const fileRef = useRef()
-  const [step, setStep] = useState('upload') // upload | map | preview | importing
+  const [step, setStep] = useState('upload')
   const [rows, setRows] = useState([])
   const [headers, setHeaders] = useState([])
-  const [mapping, setMapping] = useState({ name: '', phone: '', email: '', sex: '', unit: '' })
+  const [mapping, setMapping] = useState({ name:'', phone:'', email:'', sex:'', unit:'' })
   const [preview, setPreview] = useState([])
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState(0)
 
-  function reset() { setStep('upload'); setRows([]); setHeaders([]); setMapping({ name:'',phone:'',email:'',sex:'',unit:'' }); setPreview([]); setProgress(0) }
+  function reset() {
+    setStep('upload'); setRows([]); setHeaders([])
+    setMapping({ name:'',phone:'',email:'',sex:'',unit:'' })
+    setPreview([]); setProgress(0)
+  }
 
   function handleFile(e) {
     const file = e.target.files[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = ev => {
-      const wb = XLSX.read(ev.target.result, { type: 'binary' })
+      const wb = XLSX.read(ev.target.result, { type: 'binary', cellText: true, cellDates: true })
       const ws = wb.Sheets[wb.SheetNames[0]]
-      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      // Use raw:false to get text values (preserves leading zeros as strings)
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
       if (data.length < 2) { toast('File appears empty', 'error'); return }
       const hdrs = data[0].map(h => String(h).trim()).filter(Boolean)
       setHeaders(hdrs)
       setRows(data.slice(1).filter(r => r.some(c => c)))
-      // Auto-map common column names
-      const autoMap = { name: '', phone: '', email: '', sex: '', unit: '' }
+      // Auto-map
+      const autoMap = { name:'', phone:'', email:'', sex:'', unit:'' }
       hdrs.forEach(h => {
         const hl = h.toLowerCase()
-        if (!autoMap.name && (hl.includes('name') || hl === 'fullname')) autoMap.name = h
+        if (!autoMap.name && (hl.includes('name'))) autoMap.name = h
         if (!autoMap.phone && (hl.includes('phone') || hl.includes('mobile') || hl.includes('tel'))) autoMap.phone = h
         if (!autoMap.email && hl.includes('email')) autoMap.email = h
         if (!autoMap.sex && (hl.includes('sex') || hl.includes('gender'))) autoMap.sex = h
@@ -75,16 +80,15 @@ function ImportModal({ show, onClose, onImported }) {
     reader.readAsBinaryString(file)
   }
 
+  function getIdx(col) { return col ? headers.indexOf(col) : -1 }
+
   function buildPreview() {
     if (!mapping.name || !mapping.phone) { toast('Name and Phone columns are required', 'error'); return }
-    const nameIdx = headers.indexOf(mapping.name)
-    const phoneIdx = headers.indexOf(mapping.phone)
-    const emailIdx = mapping.email ? headers.indexOf(mapping.email) : -1
-    const sexIdx = mapping.sex ? headers.indexOf(mapping.sex) : -1
-    const unitIdx = mapping.unit ? headers.indexOf(mapping.unit) : -1
+    const nameIdx = getIdx(mapping.name), phoneIdx = getIdx(mapping.phone)
+    const emailIdx = getIdx(mapping.email), sexIdx = getIdx(mapping.sex), unitIdx = getIdx(mapping.unit)
     const prev = rows.slice(0, 5).map(r => ({
       name: r[nameIdx] || '',
-      phone: String(r[phoneIdx] || '').trim(),
+      phone: normalizePhone(r[phoneIdx]),
       email: emailIdx >= 0 ? r[emailIdx] || '' : '',
       sex: sexIdx >= 0 ? r[sexIdx] || '' : '',
       unit: unitIdx >= 0 ? r[unitIdx] || '' : '',
@@ -96,21 +100,17 @@ function ImportModal({ show, onClose, onImported }) {
   async function doImport() {
     if (!mapping.name || !mapping.phone) return
     setImporting(true); setStep('importing')
-    const nameIdx = headers.indexOf(mapping.name)
-    const phoneIdx = headers.indexOf(mapping.phone)
-    const emailIdx = mapping.email ? headers.indexOf(mapping.email) : -1
-    const sexIdx = mapping.sex ? headers.indexOf(mapping.sex) : -1
-    const unitIdx = mapping.unit ? headers.indexOf(mapping.unit) : -1
+    const nameIdx = getIdx(mapping.name), phoneIdx = getIdx(mapping.phone)
+    const emailIdx = getIdx(mapping.email), sexIdx = getIdx(mapping.sex), unitIdx = getIdx(mapping.unit)
 
     const members = rows.map(r => ({
       name: String(r[nameIdx] || '').trim(),
-      phone: String(r[phoneIdx] || '').trim().replace(/[\s\-]/g, ''),
+      phone: normalizePhone(r[phoneIdx]),  // ← normalize here
       email: emailIdx >= 0 ? String(r[emailIdx] || '').trim() : '',
       sex: sexIdx >= 0 ? String(r[sexIdx] || '').trim() : '',
       unit: unitIdx >= 0 ? String(r[unitIdx] || '').trim() : '',
     })).filter(m => m.name && m.phone)
 
-    // Get existing phones to avoid duplicates
     const existingSnap = await getDocs(collection(db, 'members'))
     const existingPhones = new Set(existingSnap.docs.map(d => d.data().phone))
 
@@ -126,18 +126,16 @@ function ImportModal({ show, onClose, onImported }) {
     }
     setImporting(false)
     toast(`✅ Imported ${imported} members${skipped > 0 ? ` (${skipped} skipped — duplicates)` : ''}`, 'success')
-    onImported()
-    reset()
-    onClose()
+    onImported?.()
+    reset(); onClose()
   }
 
   if (!show) return null
-
   return (
     <div className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-4" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="bg-white rounded-lg p-7 w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-xl">
-        <div className="text-lg font-bold text-black mb-1">Import Members from Excel</div>
-        <div className="text-sm text-slate-500 mb-6">Upload your church member register to populate the directory.</div>
+        <div className="text-lg font-bold text-black mb-1">{title}</div>
+        <div className="text-sm text-slate-500 mb-6">Upload an Excel file to populate the directory.</div>
 
         {step === 'upload' && (
           <div>
@@ -145,13 +143,11 @@ function ImportModal({ show, onClose, onImported }) {
               className="border-2 border-dashed border-slate-200 rounded-xl p-10 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-all">
               <Upload size={32} className="mx-auto text-slate-300 mb-3" />
               <div className="text-sm font-medium text-slate-600">Click to upload Excel file</div>
-              <div className="text-xs text-slate-400 mt-1">.xlsx or .xls files</div>
+              <div className="text-xs text-slate-400 mt-1">.xlsx or .xls</div>
             </div>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
-            <div className="mt-5 p-4 bg-slate-50 rounded-lg text-xs text-slate-500">
-              <div className="font-medium text-slate-700 mb-1">Your Excel should have columns like:</div>
-              Full Name, Phone Number, Email, Sex, Unit
-              <div className="mt-1 text-slate-400">Column names don't have to match exactly — you'll map them in the next step.</div>
+            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+              <strong>Tip:</strong> If your Excel has phone numbers, format that column as <strong>Text</strong> before saving to preserve leading zeros. The app also auto-fixes numbers that lost their leading zero.
             </div>
           </div>
         )}
@@ -159,19 +155,19 @@ function ImportModal({ show, onClose, onImported }) {
         {step === 'map' && (
           <div>
             <div className="text-sm font-medium text-black mb-1">{rows.length} rows found</div>
-            <div className="text-xs text-slate-400 mb-5">Map your columns to the correct fields. Name and Phone are required.</div>
+            <div className="text-xs text-slate-400 mb-5">Map your columns to the correct fields.</div>
             {[
-              { key: 'name', label: 'Full Name', required: true },
-              { key: 'phone', label: 'Phone Number', required: true },
-              { key: 'email', label: 'Email', required: false },
-              { key: 'sex', label: 'Sex / Gender', required: false },
-              { key: 'unit', label: 'Service Unit', required: false },
+              { key:'name', label:'Full Name', required:true },
+              { key:'phone', label:'Phone Number', required:true },
+              { key:'email', label:'Email', required:false },
+              { key:'sex', label:'Sex / Gender', required:false },
+              { key:'unit', label:'Service Unit', required:false },
             ].map(({ key, label, required }) => (
               <div key={key} className="mb-3">
                 <label className="block text-sm font-medium text-black mb-1.5">{label}{required && <span className="text-red-500 ml-0.5">*</span>}</label>
                 <select value={mapping[key]} onChange={e => setMapping(p => ({...p, [key]: e.target.value}))}
                   className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white cursor-pointer">
-                  <option value="">{required ? 'Select column...' : 'Skip this field'}</option>
+                  <option value="">{required ? 'Select column...' : 'Skip'}</option>
                   {headers.map(h => <option key={h} value={h}>{h}</option>)}
                 </select>
               </div>
@@ -186,7 +182,7 @@ function ImportModal({ show, onClose, onImported }) {
         {step === 'preview' && (
           <div>
             <div className="text-sm font-medium text-black mb-1">Preview (first 5 rows)</div>
-            <div className="text-xs text-slate-400 mb-4">Confirm the data looks correct before importing all {rows.length} members.</div>
+            <div className="text-xs text-slate-400 mb-4">Check the phone numbers look correct — leading zeros should be preserved.</div>
             <div className="border border-slate-200 rounded-lg overflow-hidden mb-5">
               <table className="w-full text-xs">
                 <thead><tr className="bg-slate-50 border-b border-slate-200">
@@ -195,7 +191,7 @@ function ImportModal({ show, onClose, onImported }) {
                 <tbody>{preview.map((r, i) => (
                   <tr key={i} className="border-b border-slate-100 last:border-0">
                     <td className="px-3 py-2 font-medium text-slate-700">{r.name}</td>
-                    <td className="px-3 py-2 text-slate-500">{r.phone}</td>
+                    <td className="px-3 py-2 text-slate-500 font-mono">{r.phone}</td>
                     <td className="px-3 py-2 text-slate-500">{r.email || '—'}</td>
                     <td className="px-3 py-2 text-slate-500">{r.sex || '—'}</td>
                     <td className="px-3 py-2 text-slate-500">{r.unit || '—'}</td>
@@ -204,7 +200,7 @@ function ImportModal({ show, onClose, onImported }) {
               </table>
             </div>
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 mb-5">
-              Will import <strong>{rows.length} members</strong>. Members already in the directory (same phone number) will be skipped.
+              Will import <strong>{rows.length} members</strong>. Duplicate phone numbers will be skipped.
             </div>
             <div className="flex gap-2 justify-end">
               <Btn variant="secondary" onClick={() => setStep('map')}>Back</Btn>
@@ -228,15 +224,14 @@ function ImportModal({ show, onClose, onImported }) {
   )
 }
 
-// ── ADD/EDIT MEMBER MODAL ─────────────────────────────────────
 function MemberModal({ show, onClose, member, onSaved }) {
   const toast = useToast()
-  const [form, setForm] = useState({ name: '', phone: '', email: '', sex: '', unit: '' })
+  const [form, setForm] = useState({ name:'', phone:'', email:'', sex:'', unit:'' })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (member) setForm({ name: member.name || '', phone: member.phone || '', email: member.email || '', sex: member.sex || '', unit: member.unit || '' })
-    else setForm({ name: '', phone: '', email: '', sex: '', unit: '' })
+    if (member) setForm({ name:member.name||'', phone:member.phone||'', email:member.email||'', sex:member.sex||'', unit:member.unit||'' })
+    else setForm({ name:'', phone:'', email:'', sex:'', unit:'' })
   }, [member, show])
 
   function set(k, v) { setForm(p => ({...p, [k]: v})) }
@@ -246,22 +241,16 @@ function MemberModal({ show, onClose, member, onSaved }) {
     if (!form.phone.trim()) { toast('Phone is required', 'error'); return }
     setSaving(true)
     try {
-      const data = { name: form.name.trim(), phone: form.phone.trim().replace(/[\s\-]/g,''), email: form.email.trim(), sex: form.sex, unit: form.unit }
-      if (member) {
-        await updateDoc(doc(db, 'members', member.id), data)
-        toast('Member updated.')
-      } else {
-        await addDoc(collection(db, 'members'), { ...data, totalAttendance: 0, createdAt: serverTimestamp() })
-        toast('Member added.')
-      }
+      const data = { name:form.name.trim(), phone:normalizePhone(form.phone), email:form.email.trim(), sex:form.sex, unit:form.unit }
+      if (member) { await updateDoc(doc(db, 'members', member.id), data); toast('Member updated.') }
+      else { await addDoc(collection(db, 'members'), { ...data, totalAttendance:0, createdAt:serverTimestamp() }); toast('Member added.') }
       onSaved(); onClose()
     } catch(e) { toast('Save failed: ' + e.message, 'error') }
     finally { setSaving(false) }
   }
 
   return (
-    <Modal show={show} onClose={onClose}
-      title={member ? 'Edit Member' : 'Add Member'}
+    <Modal show={show} onClose={onClose} title={member ? 'Edit Member' : 'Add Member'}
       subtitle={member ? 'Update member details.' : 'Add a new member to the directory.'}
       actions={[
         <Btn key="c" variant="secondary" onClick={onClose}>Cancel</Btn>,
@@ -284,7 +273,8 @@ function MemberModal({ show, onClose, member, onSaved }) {
   )
 }
 
-// ── MAIN PAGE ─────────────────────────────────────────────────
+export { ImportModal }
+
 export default function Members() {
   const toast = useToast()
   const [members, setMembers] = useState([])
@@ -315,8 +305,7 @@ export default function Members() {
     try {
       await deleteDoc(doc(db, 'members', deleteMember.id))
       setMembers(prev => prev.filter(m => m.id !== deleteMember.id))
-      setDeleteMember(null)
-      toast('Member removed.')
+      setDeleteMember(null); toast('Member removed.')
     } catch(e) { toast('Delete failed', 'error') }
     finally { setDeleting(false) }
   }
@@ -347,7 +336,6 @@ export default function Members() {
         </div>
       </div>
 
-      {/* Alert cards */}
       {(absent3 > 0 || absent5 > 0) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
           {absent5 > 0 && (
@@ -365,7 +353,6 @@ export default function Members() {
         </div>
       )}
 
-      {/* Filters */}
       <div className="flex items-center gap-2 mb-5 flex-wrap">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -373,12 +360,12 @@ export default function Members() {
             className="w-full border border-slate-200 rounded-md pl-8 pr-3 py-2 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100" />
         </div>
         <select value={filterUnit} onChange={e => setFilterUnit(e.target.value)}
-          className="border border-slate-200 rounded-md px-3 py-2 text-sm outline-none bg-white cursor-pointer focus:border-blue-400">
+          className="border border-slate-200 rounded-md px-3 py-2 text-sm outline-none bg-white cursor-pointer">
           <option value="">All Units</option>
           {units.map(u => <option key={u}>{u}</option>)}
         </select>
         <select value={filterFlag} onChange={e => setFilterFlag(e.target.value)}
-          className="border border-slate-200 rounded-md px-3 py-2 text-sm outline-none bg-white cursor-pointer focus:border-blue-400">
+          className="border border-slate-200 rounded-md px-3 py-2 text-sm outline-none bg-white cursor-pointer">
           <option value="">All Members</option>
           <option value="absent3">Absent 3+ weeks</option>
           <option value="absent5">Absent 5+ weeks</option>
@@ -386,22 +373,16 @@ export default function Members() {
         </select>
         {(search || filterUnit || filterFlag) && (
           <button onClick={() => { setSearch(''); setFilterUnit(''); setFilterFlag('') }}
-            className="text-xs text-slate-400 hover:text-slate-700 border border-slate-200 rounded-md px-3 py-2 transition-colors">Clear</button>
+            className="text-xs text-slate-400 hover:text-slate-700 border border-slate-200 rounded-md px-3 py-2">Clear</button>
         )}
       </div>
 
-      {/* Results count */}
-      {(search || filterUnit || filterFlag) && (
-        <div className="text-xs text-slate-400 mb-3">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</div>
-      )}
+      {(search || filterUnit || filterFlag) && <div className="text-xs text-slate-400 mb-3">{filtered.length} result{filtered.length !== 1 ? 's' : ''}</div>}
 
       {loading ? <div className="flex justify-center py-16"><Spinner dark /></div>
-        : members.length === 0 ? (
-          <EmptyState icon="👥" title="No members yet"
-            subtitle="Import your church register from Excel or add members one by one." />
-        ) : filtered.length === 0 ? (
-          <EmptyState icon="🔍" title="No results" subtitle="Try a different search or filter." />
-        ) : (
+        : members.length === 0 ? <EmptyState icon="👥" title="No members yet" subtitle="Import your church register from Excel or add members one by one." />
+        : filtered.length === 0 ? <EmptyState icon="🔍" title="No results" subtitle="Try a different search or filter." />
+        : (
           <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm border-collapse">
@@ -424,16 +405,14 @@ export default function Members() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{m.phone}</td>
+                      <td className="px-4 py-3 text-slate-500 font-mono text-xs">{m.phone}</td>
                       <td className="px-4 py-3">
                         {m.unit ? <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{m.unit}</span>
                           : <span className="text-xs text-slate-300">—</span>}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">
-                            {m.lastSeenAt ? `${daysAgo(m.lastSeenAt)}d ago` : 'Never'}
-                          </span>
+                          <span className="text-xs text-slate-400">{m.lastSeenAt ? `${daysAgo(m.lastSeenAt)}d ago` : 'Never'}</span>
                           <AbsenteeBadge lastSeen={m.lastSeenAt} />
                         </div>
                       </td>

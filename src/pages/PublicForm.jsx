@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { db } from '../firebase'
 import { doc, getDoc, addDoc, collection, query, where, getDocs, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
+import { normalizePhone } from '../utils'
 import { Spinner } from '../components/UI'
 
 function FieldInput({ field, value, onChange }) {
@@ -28,15 +29,15 @@ export default function PublicForm() {
   const { id } = useParams()
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
-  // Smart check-in states
-  const [phase, setPhase] = useState('phone') // phone | form | done | already
+  const [phase, setPhase] = useState('phone') // phone | welcome | already | newmember | done
   const [phone, setPhone] = useState('')
   const [looking, setLooking] = useState(false)
   const [member, setMember] = useState(null)
-  const [values, setValues] = useState({})
-  const [errors, setErrors] = useState({})
-  const [submitting, setSubmitting] = useState(false)
   const [alreadyTime, setAlreadyTime] = useState('')
+  // New member form
+  const [newForm, setNewForm] = useState({ name: '', email: '' })
+  const [newErrors, setNewErrors] = useState({})
+  const [submitting, setSubmitting] = useState(false)
   const phoneRef = useRef()
 
   useEffect(() => {
@@ -46,141 +47,110 @@ export default function PublicForm() {
     })
   }, [id])
 
-  useEffect(() => { if (phase === 'phone') setTimeout(() => phoneRef.current?.focus(), 100) }, [phase])
-
-  function normalizePhone(p) { return p.trim().replace(/[\s\-\+]/g, '') }
+  useEffect(() => {
+    if (phase === 'phone') setTimeout(() => phoneRef.current?.focus(), 100)
+  }, [phase])
 
   async function lookupPhone() {
     const p = normalizePhone(phone)
     if (!p) return
     setLooking(true)
     try {
-      // Check already submitted today
+      // Already checked in today?
       const existingSub = await getDocs(query(
         collection(db, 'sessions', id, 'submissions'),
         where('phone', '==', p)
       ))
       if (!existingSub.empty) {
-        const sub = existingSub.docs[0].data()
-        const time = sub.createdAt?.toDate?.()?.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) || 'earlier'
+        const time = existingSub.docs[0].data().createdAt?.toDate?.()
+          ?.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) || 'earlier'
         setAlreadyTime(time)
         setPhase('already')
         return
       }
-      // Look up in directory
+
+      // Look up in member directory
       const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
       if (!memberSnap.empty) {
         const m = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
         setMember(m)
-        // Pre-fill form values from member profile
-        const preValues = {}
-        const fields = session?.fields || []
-        fields.forEach(f => {
-          const fl = f.label.toLowerCase()
-          if (fl.includes('name')) preValues[f.id] = m.name || ''
-          else if (fl.includes('phone')) preValues[f.id] = p
-          else if (fl.includes('email')) preValues[f.id] = m.email || ''
-          else if (fl.includes('unit')) preValues[f.id] = m.unit || ''
-        })
-        setValues(preValues)
-        setPhase('form')
+        // AUTO-CONFIRM: record attendance immediately, no form needed
+        await recordAttendance(p, m.name, m.id)
+        setPhase('welcome')
+        setTimeout(() => resetToPhone(), 3500)
       } else {
-        // Unknown — show form, pre-fill phone
+        // New person — short form
         setMember(null)
-        const preValues = {}
-        const fields = session?.fields || []
-        fields.forEach(f => {
-          if (f.type === 'phone' || f.label.toLowerCase().includes('phone')) preValues[f.id] = p
-        })
-        setValues(preValues)
-        setPhase('form')
+        setPhase('newmember')
       }
     } catch(e) { alert('Network error. Please try again.') }
     finally { setLooking(false) }
   }
 
-  function setValue(fieldId, val) { setValues(p => ({ ...p, [fieldId]: val })); setErrors(p => ({ ...p, [fieldId]: '' })) }
+  async function recordAttendance(p, name, memberId) {
+    const data = {}
+    // Fill session fields from member data
+    const fields = session?.fields || []
+    fields.forEach(f => {
+      const fl = f.label.toLowerCase()
+      if (fl.includes('name')) data[f.label] = name || ''
+      else if (fl.includes('phone')) data[f.label] = p
+      else data[f.label] = ''
+    })
+    await addDoc(collection(db, 'sessions', id, 'submissions'), {
+      data, phone: p, createdAt: serverTimestamp()
+    })
+    if (memberId) {
+      await updateDoc(doc(db, 'members', memberId), {
+        lastSeenAt: serverTimestamp(),
+        totalAttendance: increment(1)
+      })
+    }
+  }
 
-  async function submit() {
-    if (!session) return
+  async function submitNewMember() {
     const errs = {}
-    session.fields.forEach(f => { if (f.required && !values[f.id]) errs[f.id] = 'This field is required' })
-    if (Object.keys(errs).length) { setErrors(errs); return }
+    if (!newForm.name.trim()) errs.name = 'Please enter your name'
+    if (Object.keys(errs).length) { setNewErrors(errs); return }
+    const p = normalizePhone(phone)
     setSubmitting(true)
     try {
-      const data = {}
-      const p = normalizePhone(phone)
-      session.fields.forEach(f => { data[f.label] = values[f.id] || '' })
-      await addDoc(collection(db, 'sessions', id, 'submissions'), { data, phone: p, createdAt: serverTimestamp() })
-      // Update member stats if known
-      if (member) {
-        await updateDoc(doc(db, 'members', member.id), {
-          lastSeenAt: serverTimestamp(),
-          totalAttendance: increment(1)
-        })
-      } else {
-        // Try to add to directory
-        const nameField = session.fields.find(f => f.label.toLowerCase().includes('name'))
-        const emailField = session.fields.find(f => f.type === 'email' || f.label.toLowerCase().includes('email'))
-        const unitField = session.fields.find(f => f.label.toLowerCase().includes('unit'))
-        const name = nameField ? values[nameField.id] || '' : ''
-        if (name && p) {
-          const existing = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
-          if (existing.empty) {
-            await addDoc(collection(db, 'members'), {
-              name, phone: p,
-              email: emailField ? values[emailField.id] || '' : '',
-              unit: unitField ? values[unitField.id] || '' : '',
-              totalAttendance: 1,
-              lastSeenAt: serverTimestamp(),
-              createdAt: serverTimestamp()
-            })
-          }
-        }
-      }
-      setPhase('done')
-    } catch(e) { alert('Submission failed. Please try again.') }
+      // Add to member directory automatically
+      const memberRef = await addDoc(collection(db, 'members'), {
+        name: newForm.name.trim(),
+        phone: p,
+        email: newForm.email.trim(),
+        totalAttendance: 1,
+        lastSeenAt: serverTimestamp(),
+        createdAt: serverTimestamp()
+      })
+      await recordAttendance(p, newForm.name.trim(), memberRef.id)
+      setMember({ name: newForm.name.trim() })
+      setPhase('welcome')
+      setTimeout(() => resetToPhone(), 3500)
+    } catch(e) { alert('Failed. Please try again.') }
     finally { setSubmitting(false) }
   }
 
-  // ── RENDER ──────────────────────────────────────────────────
+  function resetToPhone() {
+    setPhase('phone')
+    setPhone('')
+    setMember(null)
+    setNewForm({ name: '', email: '' })
+    setNewErrors({})
+  }
+
   if (loading) return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Spinner dark /></div>
 
   if (!session) return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="text-center"><div className="text-4xl mb-3">🔍</div><div className="text-lg font-semibold text-black">Form not found</div></div>
+      <div className="text-center"><div className="text-4xl mb-3">🔍</div><div className="text-lg font-semibold">Form not found</div></div>
     </div>
   )
 
   if (session.status === 'closed') return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="text-center"><div className="text-4xl mb-3">🔒</div><div className="text-lg font-semibold text-black">This session has ended.</div><div className="text-sm text-slate-400 mt-1">Please speak with an usher.</div></div>
-    </div>
-  )
-
-  // Already checked in
-  if (phase === 'already') return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="text-center max-w-sm">
-        <div className="text-5xl mb-3">✅</div>
-        <div className="text-xl font-bold text-black mb-2">Already Checked In</div>
-        <div className="text-sm text-slate-400">You checked in at {alreadyTime} today.</div>
-        <button onClick={() => { setPhase('phone'); setPhone('') }} className="mt-6 text-sm text-blue-600 underline">Not you? Try a different number</button>
-      </div>
-    </div>
-  )
-
-  // Done
-  if (phase === 'done') return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="text-center max-w-sm">
-        <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">✅</div>
-        <div className="text-xl font-bold text-black mb-2">
-          {member ? `Welcome back, ${member.name.split(' ')[0]}! 👋` : 'Attendance Recorded'}
-        </div>
-        <div className="text-sm text-slate-500">Thank you for worshipping with us.<br />Have a blessed week. 🙏</div>
-        <div className="text-xs text-slate-300 mt-6">The Elevation Church</div>
-      </div>
+      <div className="text-center"><div className="text-4xl mb-3">🔒</div><div className="text-lg font-semibold">Session has ended.</div><div className="text-sm text-slate-400 mt-1">Please speak with an usher.</div></div>
     </div>
   )
 
@@ -191,12 +161,13 @@ export default function PublicForm() {
         <div className="text-base font-semibold text-black">{session.name}</div>
       </div>
 
-      <div className="max-w-md mx-auto p-4 pb-10 mt-4">
-        {/* Step 1: Phone lookup */}
+      <div className="max-w-md mx-auto p-4 pb-10 mt-6">
+
+        {/* PHONE LOOKUP */}
         {phase === 'phone' && (
-          <div className="bg-white border border-slate-200 rounded-lg p-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6">
             <div className="text-base font-semibold text-black mb-1 text-center">Check In</div>
-            <div className="text-sm text-slate-400 mb-5 text-center">Enter your phone number to check in quickly</div>
+            <div className="text-sm text-slate-400 mb-5 text-center">Enter your phone number</div>
             <input
               ref={phoneRef}
               type="tel"
@@ -208,44 +179,71 @@ export default function PublicForm() {
               autoFocus
             />
             <button onClick={lookupPhone} disabled={looking || !phone.trim()}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3.5 text-base font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-4 text-base font-semibold transition-colors flex items-center justify-center gap-2 disabled:opacity-60">
               {looking ? <><Spinner />Checking...</> : 'Continue →'}
             </button>
           </div>
         )}
 
-        {/* Step 2: Form */}
-        {phase === 'form' && (
-          <div>
-            {member && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 flex items-center gap-3">
-                <div className="text-2xl">👋</div>
-                <div>
-                  <div className="text-sm font-semibold text-blue-700">Welcome back, {member.name.split(' ')[0]}!</div>
-                  <div className="text-xs text-blue-500">Your details are pre-filled. Just confirm below.</div>
-                </div>
-              </div>
-            )}
-            <div className="bg-white border border-slate-200 rounded-lg p-5">
-              {(session.fields || []).map(f => (
-                <div key={f.id} className="mb-5">
-                  <label className="block text-sm font-medium text-black mb-1.5">
-                    {f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}
-                  </label>
-                  <FieldInput field={f} value={values[f.id] || ''} onChange={v => setValue(f.id, v)} />
-                  {errors[f.id] && <div className="text-red-500 text-xs mt-1">{errors[f.id]}</div>}
-                </div>
-              ))}
-              <button onClick={submit} disabled={submitting}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3.5 text-base font-semibold transition-colors flex items-center justify-center gap-2 mt-2 disabled:opacity-60">
-                {submitting ? <><Spinner />Submitting...</> : member ? 'Confirm Attendance ✓' : 'Submit Attendance'}
-              </button>
-              <button onClick={() => { setPhase('phone'); setPhone('') }} className="w-full text-center text-xs text-slate-400 mt-3 hover:text-slate-600">
-                ← Try a different number
-              </button>
+        {/* WELCOME BACK — auto-confirmed, no tap needed */}
+        {phase === 'welcome' && member && (
+          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center">
+            <div className="text-5xl mb-3">👋</div>
+            <div className="text-xl font-bold text-black mb-1">
+              Welcome back, {member.name.split(' ')[0]}!
             </div>
+            <div className="text-sm text-slate-400 mb-4">Attendance recorded ✅</div>
+            <div className="text-xs text-slate-300">Returning to check-in...</div>
           </div>
         )}
+
+        {/* ALREADY CHECKED IN */}
+        {phase === 'already' && (
+          <div className="bg-white border border-slate-200 rounded-xl p-8 text-center">
+            <div className="text-5xl mb-3">✅</div>
+            <div className="text-xl font-bold text-black mb-2">Already Checked In</div>
+            <div className="text-sm text-slate-400 mb-5">You checked in at {alreadyTime} today.</div>
+            <button onClick={resetToPhone} className="text-sm text-blue-600 underline">Not you? Try a different number</button>
+          </div>
+        )}
+
+        {/* NEW MEMBER — short form */}
+        {phase === 'newmember' && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6">
+            <div className="text-base font-semibold text-black mb-1">Welcome! 👋</div>
+            <div className="text-sm text-slate-400 mb-5">First time? Just your name and we're done.</div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-black mb-1.5">
+                Full Name <span className="text-red-500">*</span>
+              </label>
+              <input type="text" value={newForm.name}
+                onChange={e => { setNewForm(p => ({...p, name: e.target.value})); setNewErrors({}) }}
+                placeholder="Your full name"
+                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                autoFocus
+              />
+              {newErrors.name && <div className="text-red-500 text-xs mt-1">{newErrors.name}</div>}
+            </div>
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-black mb-1.5">
+                Email <span className="text-slate-400 font-normal text-xs">(optional)</span>
+              </label>
+              <input type="email" value={newForm.email}
+                onChange={e => setNewForm(p => ({...p, email: e.target.value}))}
+                placeholder="your@email.com"
+                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+            <button onClick={submitNewMember} disabled={submitting}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3.5 text-base font-semibold transition-colors flex items-center justify-center gap-2 mb-3 disabled:opacity-60">
+              {submitting ? <><Spinner />Saving...</> : 'Check In →'}
+            </button>
+            <button onClick={resetToPhone} className="w-full text-center text-sm text-slate-400 hover:text-slate-600">
+              ← Try a different number
+            </button>
+          </div>
+        )}
+
       </div>
     </div>
   )

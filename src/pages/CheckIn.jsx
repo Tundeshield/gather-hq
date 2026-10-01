@@ -2,10 +2,11 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { db } from '../firebase'
 import {
-  doc, getDoc, updateDoc, addDoc, setDoc,
+  doc, getDoc, updateDoc, addDoc,
   collection, query, where, getDocs, serverTimestamp, increment
 } from 'firebase/firestore'
 import { Spinner } from '../components/UI'
+import { normalizePhone } from '../utils'
 
 // ── FIELD INPUT ────────────────────────────────────────────────
 function FieldInput({ field, value, onChange }) {
@@ -64,7 +65,7 @@ export default function CheckIn() {
 
   useEffect(() => { if (state === 'phone') setTimeout(() => phoneRef.current?.focus(), 100) }, [state])
 
-  function normalizePhone(p) { return p.trim().replace(/[\s\-\+]/g, '') }
+
 
   async function lookup() {
     const p = normalizePhone(phone)
@@ -163,6 +164,7 @@ export default function CheckIn() {
 
   // ── EVENT CHECK-IN ──────────────────────────────────────────
   async function handleEventCheckin(p) {
+    // 1. Check registrations subcollection first
     const regSnap = await getDocs(query(
       collection(db, 'events', id, 'registrations'),
       where('phone', '==', p)
@@ -177,18 +179,43 @@ export default function CheckIn() {
         setTimeout(() => resetToPhone(), 3000)
         return
       }
-      // Mark checked in
       await updateDoc(doc(db, 'events', id, 'registrations', reg.id), {
         checkedIn: true, checkedInAt: serverTimestamp()
       })
       setFoundMember({ name: reg.name || 'there' })
       setState('welcome')
       setTimeout(() => resetToPhone(), 3000)
-    } else {
-      // Not registered — short form
-      setFoundMember(null)
-      setState('newmember')
+      return
     }
+
+    // 2. Not in registrations — check members directory
+    const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
+    if (!memberSnap.empty) {
+      const member = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
+      // Auto-register and check them in as late registrant
+      await addDoc(collection(db, 'events', id, 'registrations'), {
+        phone: p,
+        name: member.name,
+        data: { 'Full Name': member.name, 'Phone Number': p, 'Email Address': member.email || '' },
+        checkedIn: true,
+        checkedInAt: serverTimestamp(),
+        isLateRegistrant: true,
+        createdAt: serverTimestamp()
+      })
+      // Update member stats
+      await updateDoc(doc(db, 'members', member.id), {
+        lastSeenAt: serverTimestamp(),
+        totalAttendance: increment(1)
+      })
+      setFoundMember({ name: member.name })
+      setState('welcome')
+      setTimeout(() => resetToPhone(), 3000)
+      return
+    }
+
+    // 3. Completely new — show short form
+    setFoundMember(null)
+    setState('newmember')
   }
 
   async function submitLateEvent() {
