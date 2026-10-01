@@ -5,7 +5,7 @@ import {
   doc, query, orderBy, serverTimestamp, where
 } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
-import { normalizePhone } from '../utils'
+import { normalizePhone, cleanOptional, combineName } from '../utils'
 import { Btn, IconBtn, Badge, Input, Select, EmptyState, Spinner } from '../components/UI'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -40,14 +40,14 @@ function ImportModal({ show, onClose, onImported, title = 'Import Members from E
   const [step, setStep] = useState('upload')
   const [rows, setRows] = useState([])
   const [headers, setHeaders] = useState([])
-  const [mapping, setMapping] = useState({ name:'', phone:'', email:'', sex:'', unit:'' })
+  const [mapping, setMapping] = useState({ name:'', name2:'', phone:'', email:'', sex:'', unit:'' })
   const [preview, setPreview] = useState([])
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState(0)
 
   function reset() {
     setStep('upload'); setRows([]); setHeaders([])
-    setMapping({ name:'',phone:'',email:'',sex:'',unit:'' })
+    setMapping({ name:'',name2:'',phone:'',email:'',sex:'',unit:'' })
     setPreview([]); setProgress(0)
   }
 
@@ -68,7 +68,9 @@ function ImportModal({ show, onClose, onImported, title = 'Import Members from E
       const autoMap = { name:'', phone:'', email:'', sex:'', unit:'' }
       hdrs.forEach(h => {
         const hl = h.toLowerCase()
-        if (!autoMap.name && (hl.includes('name'))) autoMap.name = h
+        if (!autoMap.name && (hl.includes('surname') || hl.includes('last'))) autoMap.name = h
+        else if (!autoMap.name && hl.includes('name')) autoMap.name = h
+        if (!autoMap.name2 && (hl === 'name' || hl.includes('first') || hl.includes('other'))) autoMap.name2 = h
         if (!autoMap.phone && (hl.includes('phone') || hl.includes('mobile') || hl.includes('tel'))) autoMap.phone = h
         if (!autoMap.email && hl.includes('email')) autoMap.email = h
         if (!autoMap.sex && (hl.includes('sex') || hl.includes('gender'))) autoMap.sex = h
@@ -84,14 +86,15 @@ function ImportModal({ show, onClose, onImported, title = 'Import Members from E
 
   function buildPreview() {
     if (!mapping.name || !mapping.phone) { toast('Name and Phone columns are required', 'error'); return }
-    const nameIdx = getIdx(mapping.name), phoneIdx = getIdx(mapping.phone)
+    const nameIdx = getIdx(mapping.name), name2Idx = getIdx(mapping.name2)
+    const phoneIdx = getIdx(mapping.phone)
     const emailIdx = getIdx(mapping.email), sexIdx = getIdx(mapping.sex), unitIdx = getIdx(mapping.unit)
     const prev = rows.slice(0, 5).map(r => ({
-      name: r[nameIdx] || '',
+      name: combineName(r[nameIdx], name2Idx >= 0 ? r[name2Idx] : ''),
       phone: normalizePhone(r[phoneIdx]),
-      email: emailIdx >= 0 ? r[emailIdx] || '' : '',
-      sex: sexIdx >= 0 ? r[sexIdx] || '' : '',
-      unit: unitIdx >= 0 ? r[unitIdx] || '' : '',
+      email: emailIdx >= 0 ? cleanOptional(r[emailIdx]) : '',
+      sex: sexIdx >= 0 ? cleanOptional(r[sexIdx]) : '',
+      unit: unitIdx >= 0 ? cleanOptional(r[unitIdx]) : '',
     })).filter(r => r.name && r.phone)
     setPreview(prev)
     setStep('preview')
@@ -100,15 +103,16 @@ function ImportModal({ show, onClose, onImported, title = 'Import Members from E
   async function doImport() {
     if (!mapping.name || !mapping.phone) return
     setImporting(true); setStep('importing')
-    const nameIdx = getIdx(mapping.name), phoneIdx = getIdx(mapping.phone)
+    const nameIdx = getIdx(mapping.name), name2Idx = getIdx(mapping.name2)
+    const phoneIdx = getIdx(mapping.phone)
     const emailIdx = getIdx(mapping.email), sexIdx = getIdx(mapping.sex), unitIdx = getIdx(mapping.unit)
 
     const members = rows.map(r => ({
-      name: String(r[nameIdx] || '').trim(),
-      phone: normalizePhone(r[phoneIdx]),  // ← normalize here
-      email: emailIdx >= 0 ? String(r[emailIdx] || '').trim() : '',
-      sex: sexIdx >= 0 ? String(r[sexIdx] || '').trim() : '',
-      unit: unitIdx >= 0 ? String(r[unitIdx] || '').trim() : '',
+      name: combineName(r[nameIdx], name2Idx >= 0 ? r[name2Idx] : ''),
+      phone: normalizePhone(r[phoneIdx]),
+      email: emailIdx >= 0 ? cleanOptional(r[emailIdx]) : '',
+      sex: sexIdx >= 0 ? cleanOptional(r[sexIdx]) : '',
+      unit: unitIdx >= 0 ? cleanOptional(r[unitIdx]) : '',
     })).filter(m => m.name && m.phone)
 
     const existingSnap = await getDocs(collection(db, 'members'))
@@ -157,7 +161,8 @@ function ImportModal({ show, onClose, onImported, title = 'Import Members from E
             <div className="text-sm font-medium text-black mb-1">{rows.length} rows found</div>
             <div className="text-xs text-slate-400 mb-5">Map your columns to the correct fields.</div>
             {[
-              { key:'name', label:'Full Name', required:true },
+              { key:'name', label:'First Column (Surname or Full Name)', required:true },
+              { key:'name2', label:'Second Name Column (e.g. First Name)', required:false },
               { key:'phone', label:'Phone Number', required:true },
               { key:'email', label:'Email', required:false },
               { key:'sex', label:'Sex / Gender', required:false },
