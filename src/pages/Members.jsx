@@ -2,14 +2,15 @@ import { useEffect, useState, useRef } from 'react'
 import { db } from '../firebase'
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc,
-  doc, query, orderBy, serverTimestamp
+  doc, query, orderBy, serverTimestamp, writeBatch
 } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
 import { normalizePhone, cleanOptional, combineName } from '../utils'
 import { Btn, IconBtn, Input, Select, EmptyState, Spinner } from '../components/UI'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
-import { Plus, Upload, Pencil, Trash2, Search, X, ChevronDown } from 'lucide-react'
+import { isSuperAdmin } from '../auth'
+import { Plus, Upload, Pencil, Trash2, Search, X, Download, AlertTriangle } from 'lucide-react'
 
 const UNITS = ['EPOP','Ushering','Assimilation','Hospitality','Creative Arts','Multimedia','Sound','Prayer','Missions','Junior Church','Teens Nation','Surge','Maturity Purpose','Greatness Community','Social Media','Sanitation','Protocol','Pastoral Care','Family Life','Ministry Purpose II','Other']
 
@@ -347,6 +348,8 @@ export default function Members() {
   const [editMember, setEditMember] = useState(null)
   const [deleteMember, setDeleteMember] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [showDeleteAll, setShowDeleteAll] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
   const [sortBy, setSortBy] = useState('name') // name | lastSeen | attendance
 
   useEffect(()=>{load()},[])
@@ -369,6 +372,47 @@ export default function Members() {
       setDeleteMember(null); toast('Member removed.')
     }catch(e){toast('Delete failed','error')}
     finally{setDeleting(false)}
+  }
+
+  async function deleteAllMembers() {
+    setDeletingAll(true)
+    try {
+      const snap = await getDocs(collection(db, 'members'))
+      const batches = []
+      let batch = writeBatch(db)
+      let count = 0
+      snap.docs.forEach(d => {
+        batch.delete(d.ref)
+        count++
+        if (count === 499) { batches.push(batch); batch = writeBatch(db); count = 0 }
+      })
+      if (count > 0) batches.push(batch)
+      await Promise.all(batches.map(b => b.commit()))
+      setMembers([])
+      setShowDeleteAll(false)
+      toast(`Deleted all ${snap.size} members.`)
+    } catch(e) { toast('Delete failed: ' + e.message, 'error') }
+    finally { setDeletingAll(false) }
+  }
+
+  function exportFiltered(membersToExport) {
+    const label = FILTER_OPTIONS.find(o => o.value === filterStatus)?.label || 'All Members'
+    const headers = ['Full Name', 'Phone', 'Email', 'Sex', 'Unit', 'Attendance Status', 'Last Attended', 'Days Since', 'Total Attendance']
+    const rows = membersToExport.map(m => {
+      const status = STATUS_CONFIG[getAttendanceStatus(m)]?.label || ''
+      const lastSeen = m.lastSeenAt
+        ? (m.lastSeenAt.toDate ? m.lastSeenAt.toDate() : new Date(m.lastSeenAt)).toLocaleDateString('en-GB')
+        : 'Never'
+      const days = m.lastSeenAt ? (daysAgo(m.lastSeenAt) + ' days ago') : 'No attendance recorded'
+      return [m.name||'', m.phone||'', m.email||'', m.sex||'', m.unit||'', status, lastSeen, days, m.totalAttendance||0]
+    })
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    ws['!cols'] = headers.map((h,i) => ({ wch: [25,15,28,8,20,18,15,20,12][i] }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Members')
+    const date = new Date().toISOString().split('T')[0]
+    XLSX.writeFile(wb, `GatherHQ-Members-${label.replace(/\s+/g,'-')}-${date}.xlsx`)
+    toast(`Exported ${membersToExport.length} members`, 'success')
   }
 
   function resetFilters(){setSearch('');setFilterStatus('all');setFilterUnit('')}
@@ -413,6 +457,10 @@ export default function Members() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Btn variant="secondary" onClick={()=>setShowImport(true)}><Upload size={13}/>Import Excel</Btn>
+          <Btn variant="secondary" onClick={()=>exportFiltered(sorted)}><Download size={13}/>Export {sorted.length !== members.length ? `(${sorted.length})` : 'All'}</Btn>
+          {isSuperAdmin() && (
+            <Btn variant="danger" onClick={()=>setShowDeleteAll(true)}><Trash2 size={13}/>Delete All</Btn>
+          )}
           <Btn onClick={()=>setShowAdd(true)}><Plus size={13}/>Add Member</Btn>
         </div>
       </div>
@@ -532,6 +580,19 @@ export default function Members() {
           <Btn key="c" variant="secondary" onClick={()=>setDeleteMember(null)}>Cancel</Btn>,
           <Btn key="d" variant="danger" onClick={deleteMem} disabled={deleting}>{deleting?'Removing...':'Remove'}</Btn>
         ]}/>
+      <Modal show={showDeleteAll} onClose={()=>setShowDeleteAll(false)} title="⚠️ Delete All Members?"
+        subtitle={`This will permanently delete all ${members.length} members from the directory. This cannot be undone. Attendance records from past sessions will not be affected.`}
+        actions={[
+          <Btn key="c" variant="secondary" onClick={()=>setShowDeleteAll(false)}>Cancel</Btn>,
+          <Btn key="d" variant="danger" onClick={deleteAllMembers} disabled={deletingAll}>
+            {deletingAll ? <><Spinner />Deleting...</> : `Yes, Delete All ${members.length} Members`}
+          </Btn>
+        ]}>
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-2 flex items-start gap-2">
+          <AlertTriangle size={16} className="text-red-500 flex-shrink-0 mt-0.5"/>
+          <div className="text-xs text-red-700">This action is irreversible. Only Super Admins can do this. Make sure you have a backup export before proceeding.</div>
+        </div>
+      </Modal>
     </div>
   )
 }
