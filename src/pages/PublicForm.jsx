@@ -35,7 +35,7 @@ export default function PublicForm() {
   const [member, setMember] = useState(null)
   const [alreadyTime, setAlreadyTime] = useState('')
   // New member form
-  const [newForm, setNewForm] = useState({ name: '', email: '' })
+  const [newForm, setNewForm] = useState({})
   const [newErrors, setNewErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const phoneRef = useRef()
@@ -109,23 +109,48 @@ export default function PublicForm() {
   }
 
   async function submitNewMember() {
+    const fields = session?.fields || []
     const errs = {}
-    if (!newForm.name.trim()) errs.name = 'Please enter your name'
+    fields.forEach(f => {
+      if (f.required && f.type !== 'phone' && !f.label.toLowerCase().includes('phone') && !newForm[f.id]) {
+        errs[f.id] = 'This field is required'
+      }
+    })
     if (Object.keys(errs).length) { setNewErrors(errs); return }
     const p = normalizePhone(phone)
     setSubmitting(true)
     try {
-      // Add to member directory automatically
+      // Build data object from session fields
+      const data = {}
+      let name = '', email = ''
+      fields.forEach(f => {
+        const fl = f.label.toLowerCase()
+        if (f.type === 'phone' || fl.includes('phone')) { data[f.label] = p; return }
+        const val = newForm[f.id] || ''
+        data[f.label] = val
+        // Extract name and email for directory
+        if (fl.includes('first') || fl.includes('name') && !fl.includes('last')) {
+          name = name ? name + ' ' + val : val
+        } else if (fl.includes('last') || fl.includes('surname')) {
+          name = val + (name ? ' ' + name : '')
+        } else if (fl.includes('name')) {
+          name = val
+        }
+        if (fl.includes('email')) email = val
+      })
+      if (!name) name = Object.values(data).find(v => v && typeof v === 'string' && v.length > 1) || 'Member'
+
+      // Add to member directory
       const memberRef = await addDoc(collection(db, 'members'), {
-        name: newForm.name.trim(),
+        name: name.trim(),
         phone: p,
-        email: newForm.email.trim(),
+        email: email.trim(),
         totalAttendance: 1,
         lastSeenAt: serverTimestamp(),
         createdAt: serverTimestamp()
       })
-      await recordAttendance(p, newForm.name.trim(), memberRef.id)
-      setMember({ name: newForm.name.trim() })
+      await recordAttendance(p, name.trim(), memberRef.id)
+      setMember({ name: name.trim() })
       setPhase('welcome')
       setTimeout(() => resetToPhone(), 3500)
     } catch(e) { alert('Failed. Please try again.') }
@@ -136,7 +161,7 @@ export default function PublicForm() {
     setPhase('phone')
     setPhone('')
     setMember(null)
-    setNewForm({ name: '', email: '' })
+    setNewForm({})
     setNewErrors({})
   }
 
@@ -207,33 +232,24 @@ export default function PublicForm() {
           </div>
         )}
 
-        {/* NEW MEMBER — short form */}
+        {/* NEW MEMBER — show actual session fields */}
         {phase === 'newmember' && (
           <div className="bg-white border border-slate-200 rounded-xl p-6">
             <div className="text-base font-semibold text-black mb-1">Welcome! 👋</div>
-            <div className="text-sm text-slate-400 mb-5">First time? Just your name and we're done.</div>
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-black mb-1.5">
-                Full Name <span className="text-red-500">*</span>
-              </label>
-              <input type="text" value={newForm.name}
-                onChange={e => { setNewForm(p => ({...p, name: e.target.value})); setNewErrors({}) }}
-                placeholder="Your full name"
-                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                autoFocus
-              />
-              {newErrors.name && <div className="text-red-500 text-xs mt-1">{newErrors.name}</div>}
-            </div>
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-black mb-1.5">
-                Email <span className="text-slate-400 font-normal text-xs">(optional)</span>
-              </label>
-              <input type="email" value={newForm.email}
-                onChange={e => setNewForm(p => ({...p, email: e.target.value}))}
-                placeholder="your@email.com"
-                className="w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-              />
-            </div>
+            <div className="text-sm text-slate-400 mb-5">First time here? Fill in your details below.</div>
+            {(session.fields || []).map(f => {
+              // Skip phone field — we already have it
+              if (f.type === 'phone' || f.label.toLowerCase().includes('phone')) return null
+              return (
+                <div key={f.id} className="mb-4">
+                  <label className="block text-sm font-medium text-black mb-1.5">
+                    {f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}
+                  </label>
+                  <FieldInput field={f} value={newForm[f.id] || ''} onChange={v => setNewForm(p => ({...p, [f.id]: v}))} />
+                  {newErrors[f.id] && <div className="text-red-500 text-xs mt-1">{newErrors[f.id]}</div>}
+                </div>
+              )
+            })}
             <button onClick={submitNewMember} disabled={submitting}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-3.5 text-base font-semibold transition-colors flex items-center justify-center gap-2 mb-3 disabled:opacity-60">
               {submitting ? <><Spinner />Saving...</> : 'Check In →'}
