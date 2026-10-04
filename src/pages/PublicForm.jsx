@@ -122,23 +122,32 @@ export default function PublicForm() {
     try {
       // Build data object from session fields
       const data = {}
-      let name = '', email = ''
+      let firstName = '', lastName = '', fullName = '', email = ''
       fields.forEach(f => {
         const fl = f.label.toLowerCase()
         if (f.type === 'phone' || fl.includes('phone')) { data[f.label] = p; return }
-        const val = newForm[f.id] || ''
+        const val = (newForm[f.id] || '').trim()
         data[f.label] = val
-        // Extract name and email for directory
-        if (fl.includes('first') || fl.includes('name') && !fl.includes('last')) {
-          name = name ? name + ' ' + val : val
-        } else if (fl.includes('last') || fl.includes('surname')) {
-          name = val + (name ? ' ' + name : '')
-        } else if (fl.includes('name')) {
-          name = val
-        }
+        // Only extract name from text-type fields — never dropdown/checkbox values
+        if (f.type !== 'text' && f.type !== 'email' && f.type !== 'textarea') return
+        if (fl.includes('first name') || fl === 'first') firstName = val
+        else if (fl.includes('last name') || fl.includes('surname') || fl === 'last') lastName = val
+        else if (fl.includes('full name') || fl === 'name') fullName = val
         if (fl.includes('email')) email = val
       })
-      if (!name) name = Object.values(data).find(v => v && typeof v === 'string' && v.length > 1) || 'Member'
+      // Combine: prefer first+last, fallback to full name
+      let name = ''
+      if (firstName || lastName) name = [firstName, lastName].filter(Boolean).join(' ')
+      else if (fullName) name = fullName
+      // Final fallback: find first non-empty text field that isn't Yes/No
+      if (!name) {
+        name = Object.entries(data).find(([k, v]) => {
+          return v && typeof v === 'string' && v.length > 1 &&
+            !['yes','no','male','female'].includes(v.toLowerCase()) &&
+            !k.toLowerCase().includes('email') &&
+            !k.toLowerCase().includes('phone')
+        })?.[1] || 'Member'
+      }
 
       // Add to member directory
       const memberRef = await addDoc(collection(db, 'members'), {
