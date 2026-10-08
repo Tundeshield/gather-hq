@@ -57,7 +57,6 @@ export default function App() {
           {/* Platform admin */}
           <Route element={<PlatformLayout />}>
             <Route path="/platform" element={<Platform />} />
-            <Route path="/migrate" element={<Migrate />} />
           </Route>
 
           {/* All church users */}
