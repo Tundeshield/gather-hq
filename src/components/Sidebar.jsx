@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { logout, currentUser, isSuperAdmin, hasRole, currentChurchName } from '../auth'
-import { LayoutDashboard, CalendarCheck, Users, MessageSquare, DollarSign, LogOut, Menu, X, CalendarRange, UserCog } from 'lucide-react'
+import { LayoutDashboard, CalendarCheck, Users, MessageSquare, LogOut, Menu, X, CalendarRange, UserCog } from 'lucide-react'
 import { useState } from 'react'
 
 const allNavItems = [
@@ -13,7 +13,6 @@ const allNavItems = [
 
 const soonItems = [
   { label: 'Communication', icon: MessageSquare },
-  { label: 'Giving', icon: DollarSign },
 ]
 
 export default function Sidebar() {

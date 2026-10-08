@@ -165,7 +165,7 @@ export default function PublicForm() {
         createdAt: serverTimestamp()
       })
       await recordAttendance(p, name.trim(), memberRef.id, data)
-      setMember({ name: name.trim() })
+      setMember({ name: name.trim(), isNew: true })
       setPhase('welcome')
       setTimeout(() => resetToPhone(), 3500)
     } catch(e) { alert('Failed. Please try again.') }
@@ -195,13 +195,14 @@ export default function PublicForm() {
   )
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 flex flex-col">
       <div className="bg-white border-b border-slate-200 px-5 py-3 sticky top-0 z-10">
         <div className="text-xs text-slate-400">{session.churchName || 'GatherHQ'} — Attendance</div>
         <div className="text-base font-semibold text-black">{session.name}</div>
       </div>
 
-      <div className="max-w-md mx-auto p-4 pb-10 mt-6">
+      <div className="flex-1 flex items-center justify-center p-4">
+      <div className="w-full max-w-md">
 
         {/* PHONE LOOKUP */}
         {phase === 'phone' && (
@@ -225,12 +226,14 @@ export default function PublicForm() {
           </div>
         )}
 
-        {/* WELCOME BACK — auto-confirmed, no tap needed */}
+        {/* WELCOME — auto-confirmed or new member */}
         {phase === 'welcome' && member && (
           <div className="bg-white border border-slate-200 rounded-xl p-8 text-center">
             <div className="text-5xl mb-3">👋</div>
             <div className="text-xl font-bold text-black mb-1">
-              Welcome back, {member.name.split(' ')[0]}!
+              {member.isNew
+                ? `Welcome, ${member.name.split(' ')[0]}!`
+                : `Welcome back, ${member.name.split(' ')[0]}!`}
             </div>
             <div className="text-sm text-slate-400 mb-4">Attendance recorded ✅</div>
             <div className="text-xs text-slate-300">Returning to check-in...</div>
@@ -275,6 +278,7 @@ export default function PublicForm() {
           </div>
         )}
 
+      </div>
       </div>
     </div>
   )
