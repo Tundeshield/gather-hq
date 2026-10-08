@@ -55,8 +55,8 @@ export default function Migrate() {
       const COLS = ['members', 'sessions', 'events']
       for (const col of COLS) {
         const snap = await getDocs(collection(db, 'churches', clearTarget, col))
-        // Only delete docs that were migrated (have migratedAt field)
-        const toDelete = snap.docs.filter(d => d.data().migratedAt)
+        // Delete all docs in this collection for the selected church
+        const toDelete = snap.docs
         // Delete in batches of 450
         let batch = writeBatch(db)
         let batchCount = 0
@@ -161,15 +161,15 @@ export default function Migrate() {
         {/* ── CLEAR MIGRATED DATA ── */}
         {isAdmin && (
           <div className="bg-white border border-slate-200 rounded-lg p-8 shadow-sm">
-            <div className="text-xl font-bold text-black mb-1">Clear Migrated Data</div>
+            <div className="text-xl font-bold text-black mb-1">Clear Branch Data</div>
             <div className="text-sm text-slate-500 mb-6">
-              Remove records that were brought in by migration from a specific branch. Only deletes docs tagged with <code className="text-xs bg-slate-100 px-1 py-0.5 rounded">migratedAt</code> — manually added records are safe.
+              Wipe all members, sessions and events from a branch. Use this to undo a migration that went to the wrong church.
             </div>
 
             {!clearResults ? (
               <>
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 text-sm text-red-700">
-                  ⚠️ This permanently deletes members, sessions and events that were migrated into the selected branch. This cannot be undone.
+                  ⚠️ This permanently deletes ALL members, sessions and events from the selected branch. Cannot be undone. Only use on a branch that received wrong data.
                 </div>
 
                 <div className="mb-4">
