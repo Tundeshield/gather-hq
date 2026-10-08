@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { db } from '../firebase'
-import { churchDoc } from '../db'
-import { doc, getDoc, updateDoc } from 'firebase/firestore'
+import { churchDoc, churchCol } from '../db'
+import { doc, getDoc, updateDoc, addDoc, getDocs, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import FormBuilder, { SESSION_PRESETS, EVENT_PRESETS } from '../components/FormBuilder'
-import { Btn, Spinner } from '../components/UI'
+import { Btn, Spinner, Input } from '../components/UI'
+import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
-import { ArrowLeft, Save } from 'lucide-react'
+import { ArrowLeft, Save, BookMarked } from 'lucide-react'
 
 export default function BuilderPage() {
   const { id } = useParams()
@@ -18,6 +19,9 @@ export default function BuilderPage() {
   const [fields, setFields] = useState([])
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+  const [templateName, setTemplateName] = useState('')
+  const [savingTemplate, setSavingTemplate] = useState(false)
 
   const colName = mode === 'event' ? 'events' : 'sessions'
 
@@ -47,6 +51,23 @@ export default function BuilderPage() {
     finally { setSaving(false) }
   }
 
+  async function saveAsTemplate() {
+    if (!templateName.trim()) { toast('Enter a template name', 'error'); return }
+    if (fields.length === 0) { toast('Add at least one field first', 'error'); return }
+    setSavingTemplate(true)
+    try {
+      await addDoc(churchCol('templates'), {
+        name: templateName.trim(),
+        fields,
+        createdAt: serverTimestamp()
+      })
+      toast(`Template "${templateName.trim()}" saved!`)
+      setShowSaveTemplate(false)
+      setTemplateName('')
+    } catch(e) { toast('Failed to save template: ' + e.message, 'error') }
+    finally { setSavingTemplate(false) }
+  }
+
   function handleBack() {
     navigate(mode === 'event' ? '/events/' + id : '/attendance/' + id)
   }
@@ -65,9 +86,16 @@ export default function BuilderPage() {
             <p className="text-sm text-slate-500 mt-0.5">Configuring "{record?.name}"</p>
           </div>
         </div>
-        <Btn onClick={save} disabled={saving}>
-          <Save size={13} />{saving ? 'Saving...' : 'Save & Activate'}
-        </Btn>
+        <div className="flex items-center gap-2">
+          {mode !== 'event' && (
+            <Btn variant="secondary" onClick={() => { setTemplateName(record?.name || ''); setShowSaveTemplate(true) }}>
+              <BookMarked size={13} />Save as Template
+            </Btn>
+          )}
+          <Btn onClick={save} disabled={saving}>
+            <Save size={13} />{saving ? 'Saving...' : 'Save & Activate'}
+          </Btn>
+        </div>
       </div>
       <FormBuilder
         fields={fields}
@@ -75,6 +103,19 @@ export default function BuilderPage() {
         presets={mode === 'event' ? EVENT_PRESETS : SESSION_PRESETS}
         sessionName={record?.name}
       />
+
+      {/* Save as Template Modal */}
+      <Modal show={showSaveTemplate} onClose={() => setShowSaveTemplate(false)}
+        title="Save as Template"
+        subtitle="Give this form a name so you can reuse it for future sessions."
+        actions={[
+          <Btn key="cancel" variant="secondary" onClick={() => setShowSaveTemplate(false)}>Cancel</Btn>,
+          <Btn key="save" onClick={saveAsTemplate} disabled={savingTemplate}>{savingTemplate ? 'Saving...' : 'Save Template'}</Btn>
+        ]}>
+        <Input label="Template Name" required placeholder="e.g. Sunday Service, Midweek, Youth Service"
+          value={templateName} onChange={e => setTemplateName(e.target.value)} />
+        <div className="text-xs text-slate-400 mt-2">{fields.length} field{fields.length !== 1 ? 's' : ''} will be saved in this template.</div>
+      </Modal>
     </div>
   )
 }

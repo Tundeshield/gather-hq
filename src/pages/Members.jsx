@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { db } from '../firebase'
 import { churchCol, churchDoc } from '../db'
 import {
@@ -339,10 +340,11 @@ const FILTER_OPTIONS = [
 
 export default function Members() {
   const toast = useToast()
+  const [searchParams] = useSearchParams()
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
+  const [filterStatus, setFilterStatus] = useState(searchParams.get('filter') || 'all')
   const [filterUnit, setFilterUnit] = useState('')
   const [showImport, setShowImport] = useState(false)
   const [showAdd, setShowAdd] = useState(false)

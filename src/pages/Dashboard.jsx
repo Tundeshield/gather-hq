@@ -4,22 +4,30 @@ import { db } from '../firebase'
 import { churchCol, churchDoc, subCol } from '../db'
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore'
 import { StatCard, Badge, EmptyState, Spinner } from '../components/UI'
-import { LogOut } from 'lucide-react'
+import { LogOut, AlertTriangle } from 'lucide-react'
 import { logout } from '../auth'
+
+function daysAgo(ts) {
+  if (!ts) return null
+  const d = ts.toDate ? ts.toDate() : new Date(ts)
+  return Math.floor((Date.now() - d.getTime()) / 86400000)
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [stats, setStats] = useState({ today: 0, active: 0, events: 0, sessions: 0 })
   const [recent, setRecent] = useState([])
+  const [absenteeCount, setAbsenteeCount] = useState(0)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     try {
-      const [sessSnap, evtSnap] = await Promise.all([
+      const [sessSnap, evtSnap, memberSnap] = await Promise.all([
         getDocs(query(churchCol('sessions'), orderBy('createdAt', 'desc'))),
-        getDocs(query(churchCol('events'), orderBy('createdAt', 'desc')))
+        getDocs(query(churchCol('events'), orderBy('createdAt', 'desc'))),
+        getDocs(churchCol('members'))
       ])
       const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       const today = new Date().toISOString().split('T')[0]
@@ -37,6 +45,14 @@ export default function Dashboard() {
         sessions: sessions.length
       })
       setRecent(sessions.slice(0, 5).map(s => ({ ...s, count: counts[s.id] || 0 })))
+      // Absentee alert: members with lastSeenAt > 21 days ago (3+ Sundays)
+      const absent = memberSnap.docs.filter(d => {
+        const m = d.data()
+        if (!m.lastSeenAt) return false
+        const days = daysAgo(m.lastSeenAt)
+        return days !== null && days >= 21
+      })
+      setAbsenteeCount(absent.length)
     } catch (e) { console.error(e) }
     finally { setLoading(false) }
   }
@@ -63,6 +79,22 @@ export default function Dashboard() {
         <StatCard label="Total Events" value={stats.events} />
         <StatCard label="Total Sessions" value={stats.sessions} />
       </div>
+
+      {/* Absentee Alert */}
+      {absenteeCount > 0 && (
+        <div
+          onClick={() => navigate('/people?filter=absent_3w')}
+          className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-lg px-4 py-3.5 mb-6 cursor-pointer hover:bg-orange-100 transition-all">
+          <AlertTriangle size={18} className="text-orange-500 flex-shrink-0" />
+          <div className="flex-1">
+            <div className="text-sm font-semibold text-orange-800">
+              {absenteeCount} member{absenteeCount !== 1 ? 's' : ''} absent for 3+ weeks
+            </div>
+            <div className="text-xs text-orange-600 mt-0.5">These members haven't checked in recently — consider following up</div>
+          </div>
+          <span className="text-orange-400 text-lg flex-shrink-0">›</span>
+        </div>
+      )}
 
       <div className="text-sm font-semibold text-black mb-3">Recent Sessions</div>
       {recent.length === 0 ? (

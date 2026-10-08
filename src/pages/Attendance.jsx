@@ -7,7 +7,7 @@ import { collection, getDocs, addDoc, deleteDoc, doc, query, orderBy, serverTime
 import { StatCard, Badge, Btn, Input, Textarea, EmptyState, Spinner, IconBtn } from '../components/UI'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
-import { Plus, Pencil, Eye, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Eye, Trash2, BookMarked } from 'lucide-react'
 
 export default function Attendance() {
   const navigate = useNavigate()
@@ -19,8 +19,17 @@ export default function Attendance() {
   const [showDelete, setShowDelete] = useState(null)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ name: '', date: new Date().toISOString().split('T')[0], description: '' })
+  const [templates, setTemplates] = useState([])
+  const [selectedTemplate, setSelectedTemplate] = useState('')
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load(); loadTemplates() }, [])
+
+  async function loadTemplates() {
+    try {
+      const snap = await getDocs(query(churchCol('templates'), orderBy('createdAt', 'desc')))
+      setTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    } catch(e) { /* templates are optional */ }
+  }
 
   async function load() {
     setLoading(true)
@@ -43,18 +52,24 @@ export default function Attendance() {
     if (!form.date) { toast('Select a date', 'error'); return }
     setCreating(true)
     try {
+      // Apply template fields if one was selected (give new IDs to avoid conflicts)
+      const tmpl = templates.find(t => t.id === selectedTemplate)
+      const templateFields = tmpl
+        ? tmpl.fields.map(f => ({ ...f, id: 'f_' + Date.now() + Math.random().toString(36).slice(2, 5) }))
+        : []
       const ref = await addDoc(churchCol('sessions'), {
         name: form.name.trim(),
         date: form.date,
         description: form.description.trim(),
         status: 'active',
-        fields: [],
+        fields: templateFields,
         churchName: getSession()?.churchName || '',
         createdAt: serverTimestamp()
       })
       setShowCreate(false)
       setForm({ name: '', date: new Date().toISOString().split('T')[0], description: '' })
-      toast('Session created!')
+      setSelectedTemplate('')
+      toast(tmpl ? `Session created from "${tmpl.name}" template!` : 'Session created!')
       navigate('/attendance/' + ref.id + '/builder')
     } catch(e) { toast('Failed to create session: ' + e.message, 'error') }
     finally { setCreating(false) }
@@ -114,14 +129,44 @@ export default function Attendance() {
       )}
 
       {/* Create Modal */}
-      <Modal show={showCreate} onClose={() => setShowCreate(false)} title="Create New Session" subtitle="Start a new attendance collection for a service."
+      <Modal show={showCreate} onClose={() => { setShowCreate(false); setSelectedTemplate('') }} title="Create New Session" subtitle="Start a new attendance collection for a service."
         actions={[
-          <Btn key="cancel" variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Btn>,
+          <Btn key="cancel" variant="secondary" onClick={() => { setShowCreate(false); setSelectedTemplate('') }}>Cancel</Btn>,
           <Btn key="create" onClick={createSession} disabled={creating}>{creating ? 'Creating...' : 'Create & Build Form'}</Btn>
         ]}>
         <Input label="Session Name" required placeholder="e.g. Sunday First Service" value={form.name} onChange={e => setForm(p => ({...p, name: e.target.value}))} />
         <Input label="Date" required type="date" value={form.date} onChange={e => setForm(p => ({...p, date: e.target.value}))} />
         <Textarea label="Description (Optional)" placeholder="Service theme or notes..." value={form.description} onChange={e => setForm(p => ({...p, description: e.target.value}))} />
+
+        {templates.length > 0 && (
+          <div className="mt-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              <BookMarked size={13} className="inline mr-1.5 text-slate-400" />
+              Start from a Template <span className="text-slate-400 font-normal">(optional)</span>
+            </label>
+            <select
+              value={selectedTemplate}
+              onChange={e => {
+                setSelectedTemplate(e.target.value)
+                // Auto-fill session name from template if name is empty
+                if (e.target.value && !form.name.trim()) {
+                  const t = templates.find(t => t.id === e.target.value)
+                  if (t) setForm(p => ({ ...p, name: t.name }))
+                }
+              }}
+              className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm text-black outline-none focus:border-blue-400 bg-white">
+              <option value="">— No template, start blank —</option>
+              {templates.map(t => (
+                <option key={t.id} value={t.id}>{t.name} ({t.fields?.length || 0} fields)</option>
+              ))}
+            </select>
+            {selectedTemplate && (
+              <div className="mt-2 text-xs text-blue-600 bg-blue-50 border border-blue-100 rounded px-3 py-2">
+                ✓ Form will be pre-filled with {templates.find(t => t.id === selectedTemplate)?.fields?.length} field{templates.find(t => t.id === selectedTemplate)?.fields?.length !== 1 ? 's' : ''} — you can still edit them in the builder.
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
 
       {/* Delete Modal */}
