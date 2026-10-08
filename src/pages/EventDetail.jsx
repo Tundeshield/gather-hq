@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchDoc, subCol } from '../db'
 import { doc, getDoc, updateDoc, collection, getDocs, addDoc, query, orderBy, where, serverTimestamp } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
 import { normalizePhone } from '../utils'
@@ -57,7 +58,7 @@ function ImportRegistrantsModal({ show, onClose, eventId, onImported }) {
     setImporting(true); setStep('importing')
 
     // Get existing registrations to avoid duplicates
-    const existing = await getDocs(collection(db, 'events', eventId, 'registrations'))
+    const existing = await getDocs(subCol('events', eventId, 'registrations'))
     const existingPhones = new Set(existing.docs.map(d => d.data().phone))
 
     let imported = 0, skipped = 0
@@ -69,7 +70,7 @@ function ImportRegistrantsModal({ show, onClose, eventId, onImported }) {
       if (!name || !phone) { skipped++; continue }
       if (existingPhones.has(phone)) { skipped++; continue }
       try {
-        await addDoc(collection(db, 'events', eventId, 'registrations'), {
+        await addDoc(subCol('events', eventId, 'registrations'), {
           name, phone,
           data: { 'Full Name': name, 'Phone Number': phone },
           checkedIn: false,
@@ -168,16 +169,16 @@ export default function EventDetail() {
 
   async function load() {
     setLoading(true)
-    const snap = await getDoc(doc(db, 'events', id))
+    const snap = await getDoc(churchDoc('events', id))
     if (snap.exists()) setEvent({ id: snap.id, ...snap.data() })
-    const rSnap = await getDocs(query(collection(db, 'events', id, 'registrations'), orderBy('createdAt', 'desc')))
+    const rSnap = await getDocs(query(subCol('events', id, 'registrations'), orderBy('createdAt', 'desc')))
     setRegs(rSnap.docs.map(d => ({ id: d.id, ...d.data() })))
     setLoading(false)
   }
 
   async function switchMode(newMode) {
     setSwitching(true)
-    await updateDoc(doc(db, 'events', id), { mode: newMode })
+    await updateDoc(churchDoc('events', id), { mode: newMode })
     setEvent(prev => ({ ...prev, mode: newMode }))
     setModeModal(null)
     setSwitching(false)

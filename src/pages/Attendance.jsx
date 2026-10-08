@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchCol, churchDoc, subCol } from '../db'
 import { collection, getDocs, addDoc, deleteDoc, doc, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import { StatCard, Badge, Btn, Input, Textarea, EmptyState, Spinner, IconBtn } from '../components/UI'
 import Modal from '../components/Modal'
@@ -23,12 +24,12 @@ export default function Attendance() {
   async function load() {
     setLoading(true)
     try {
-      const snap = await getDocs(query(collection(db, 'sessions'), orderBy('createdAt', 'desc')))
+      const snap = await getDocs(query(churchCol('sessions'), orderBy('createdAt', 'desc')))
       const sess = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       setSessions(sess)
       const c = {}
       await Promise.all(sess.map(async s => {
-        const sub = await getDocs(collection(db, 'sessions', s.id, 'submissions'))
+        const sub = await getDocs(subCol('sessions', s.id, 'submissions'))
         c[s.id] = sub.size
       }))
       setCounts(c)
@@ -41,7 +42,7 @@ export default function Attendance() {
     if (!form.date) { toast('Select a date', 'error'); return }
     setCreating(true)
     try {
-      const ref = await addDoc(collection(db, 'sessions'), {
+      const ref = await addDoc(churchCol('sessions'), {
         name: form.name.trim(),
         date: form.date,
         description: form.description.trim(),
@@ -59,7 +60,7 @@ export default function Attendance() {
 
   async function deleteSession(id) {
     try {
-      await deleteDoc(doc(db, 'sessions', id))
+      await deleteDoc(churchDoc('sessions', id))
       setSessions(prev => prev.filter(s => s.id !== id))
       setShowDelete(null)
       toast('Session deleted.')

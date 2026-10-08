@@ -1,8 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { db } from '../firebase'
-import { doc, getDoc, addDoc, collection, query, where, getDocs, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
+import { query, where, getDocs, serverTimestamp, increment } from 'firebase/firestore'
 import { normalizePhone } from '../utils'
+import { findSessionById, submissionsCol, membersCol, memberDocRef } from '../publicDb'
 import { Spinner } from '../components/UI'
 
 function FieldInput({ field, value, onChange }) {
@@ -41,8 +41,8 @@ export default function PublicForm() {
   const phoneRef = useRef()
 
   useEffect(() => {
-    getDoc(doc(db, 'sessions', id)).then(snap => {
-      if (snap.exists()) setSession({ id: snap.id, ...snap.data() })
+    findSessionById(id).then(data => {
+      if (data) setSession(data)
       setLoading(false)
     })
   }, [id])
@@ -58,7 +58,7 @@ export default function PublicForm() {
     try {
       // Already checked in today?
       const existingSub = await getDocs(query(
-        collection(db, 'sessions', id, 'submissions'),
+        submissionsCol(session.churchId, id),
         where('phone', '==', p)
       ))
       if (!existingSub.empty) {
@@ -70,7 +70,7 @@ export default function PublicForm() {
       }
 
       // Look up in member directory
-      const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
+      const memberSnap = await getDocs(query(membersCol(session.churchId), where('phone', '==', p)))
       if (!memberSnap.empty) {
         const m = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
         setMember(m)
@@ -97,11 +97,11 @@ export default function PublicForm() {
       else if (fl.includes('phone')) data[f.label] = p
       else data[f.label] = ''
     })
-    await addDoc(collection(db, 'sessions', id, 'submissions'), {
+    await addDoc(submissionsCol(session.churchId, id), {
       data, phone: p, createdAt: serverTimestamp()
     })
     if (memberId) {
-      await updateDoc(doc(db, 'members', memberId), {
+      await updateDoc(memberDocRef(session.churchId, memberId), {
         lastSeenAt: serverTimestamp(),
         totalAttendance: increment(1)
       })
@@ -150,7 +150,7 @@ export default function PublicForm() {
       }
 
       // Add to member directory
-      const memberRef = await addDoc(collection(db, 'members'), {
+      const memberRef = await addDoc(membersCol(session.churchId), {
         name: name.trim(),
         phone: p,
         email: email.trim(),

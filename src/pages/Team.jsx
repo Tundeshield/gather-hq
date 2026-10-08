@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { getTeamMembers, addTeamMember, updateTeamMember, deactivateTeamMember, ROLES, currentUser } from '../auth'
+import { getTeamMembers, addTeamMember, updateTeamMember, deactivateTeamMember, ROLES, currentUser, currentChurchId, currentChurchName } from '../auth'
 import { Btn, IconBtn, Input, Select, EmptyState, Spinner } from '../components/UI'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
-import { Plus, Pencil, UserX, Shield, Eye, EyeOff } from 'lucide-react'
+import { Plus, Pencil, UserX, Eye, EyeOff } from 'lucide-react'
 
 function RoleBadge({ role }) {
   const r = ROLES.find(r => r.value === role)
@@ -14,11 +14,7 @@ function RoleBadge({ role }) {
     usher: 'bg-amber-100 text-amber-700 border-amber-200',
     viewer: 'bg-slate-100 text-slate-600 border-slate-200',
   }
-  return (
-    <span className={`text-[11px] font-medium px-2 py-0.5 rounded-sm border ${colors[role] || colors.viewer}`}>
-      {r?.label || role}
-    </span>
-  )
+  return <span className={`text-[11px] font-medium px-2 py-0.5 rounded-sm border ${colors[role] || colors.viewer}`}>{r?.label || role}</span>
 }
 
 function InitialAvatar({ name }) {
@@ -28,7 +24,7 @@ function InitialAvatar({ name }) {
   return <div className={`w-9 h-9 ${color} rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0`}>{initials}</div>
 }
 
-function MemberModal({ show, onClose, member, onSaved }) {
+function MemberModal({ show, onClose, member, onSaved, churchId }) {
   const toast = useToast()
   const [form, setForm] = useState({ name: '', email: '', password: '', role: 'attendance_lead' })
   const [showPass, setShowPass] = useState(false)
@@ -48,13 +44,13 @@ function MemberModal({ show, onClose, member, onSaved }) {
     setSaving(true)
     try {
       if (member) {
-        const updates = { name: form.name.trim(), email: form.email.toLowerCase().trim(), role: form.role }
+        const updates = { name: form.name.trim(), email: form.email.toLowerCase().trim(), role: form.role, originalEmail: member.email, originalName: member.name }
         if (form.password.trim()) updates.password = form.password.trim()
-        await updateTeamMember(member.id, updates)
+        await updateTeamMember(churchId, member.id, updates)
         toast('Team member updated.')
       } else {
-        await addTeamMember({ name: form.name.trim(), email: form.email.toLowerCase().trim(), password: form.password.trim(), role: form.role })
-        toast('Team member added. Share their credentials.')
+        await addTeamMember(churchId, { name: form.name.trim(), email: form.email.toLowerCase().trim(), password: form.password.trim(), role: form.role })
+        toast('Team member added.')
       }
       onSaved(); onClose()
     } catch(e) { toast(e.message || 'Save failed', 'error') }
@@ -66,13 +62,13 @@ function MemberModal({ show, onClose, member, onSaved }) {
   return (
     <Modal show={show} onClose={onClose}
       title={member ? 'Edit Team Member' : 'Add Team Member'}
-      subtitle={member ? 'Update their details or reset their password.' : 'Add a new person to your team. Share their login credentials after.'}
+      subtitle={member ? 'Update their details or reset their password.' : 'Add a new person to your team.'}
       actions={[
         <Btn key="c" variant="secondary" onClick={onClose}>Cancel</Btn>,
         <Btn key="s" onClick={save} disabled={saving}>{saving ? 'Saving...' : member ? 'Save Changes' : 'Add Member'}</Btn>
       ]}>
       <Input label="Full Name" required placeholder="e.g. Biodun Adewale" value={form.name} onChange={e => set('name', e.target.value)} />
-      <Input label="Email" required type="email" placeholder="biodun@tec.church" value={form.email} onChange={e => set('email', e.target.value)} />
+      <Input label="Email" required type="email" placeholder="biodun@email.com" value={form.email} onChange={e => set('email', e.target.value)} />
       <div className="mb-3.5">
         <label className="block text-sm font-medium text-black mb-1.5">
           Password {member && <span className="text-slate-400 font-normal text-xs">(leave blank to keep current)</span>}
@@ -82,8 +78,7 @@ function MemberModal({ show, onClose, member, onSaved }) {
           <input type={showPass ? 'text' : 'password'} value={form.password} onChange={e => set('password', e.target.value)}
             placeholder={member ? 'New password...' : 'Set a password'}
             className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 pr-10" />
-          <button type="button" onClick={() => setShowPass(!showPass)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+          <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
             {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
@@ -94,9 +89,7 @@ function MemberModal({ show, onClose, member, onSaved }) {
           className="w-full border border-slate-200 rounded-md px-3 py-2.5 text-sm outline-none focus:border-blue-500 bg-white cursor-pointer">
           {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
         </select>
-        {selectedRole && (
-          <div className="mt-2 text-xs text-slate-400 bg-slate-50 rounded p-2">{selectedRole.description}</div>
-        )}
+        {selectedRole && <div className="mt-2 text-xs text-slate-400 bg-slate-50 rounded p-2">{selectedRole.description}</div>}
       </div>
     </Modal>
   )
@@ -105,19 +98,20 @@ function MemberModal({ show, onClose, member, onSaved }) {
 export default function Team() {
   const toast = useToast()
   const me = currentUser()
+  const churchId = currentChurchId()
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [editMember, setEditMember] = useState(null)
-  const [deactivating, setDeactivating] = useState(null)
   const [showDeactivate, setShowDeactivate] = useState(null)
+  const [deactivating, setDeactivating] = useState(false)
 
   useEffect(() => { load() }, [])
 
   async function load() {
     setLoading(true)
     try {
-      const team = await getTeamMembers()
+      const team = await getTeamMembers(churchId)
       setMembers(team.sort((a, b) => a.name.localeCompare(b.name)))
     } catch(e) { toast('Failed to load team', 'error') }
     finally { setLoading(false) }
@@ -125,14 +119,14 @@ export default function Team() {
 
   async function doDeactivate() {
     if (!showDeactivate) return
-    setDeactivating(showDeactivate.id)
+    setDeactivating(true)
     try {
-      await deactivateTeamMember(showDeactivate.id)
+      await deactivateTeamMember(churchId, showDeactivate.id, showDeactivate.email)
       setMembers(prev => prev.filter(m => m.id !== showDeactivate.id))
       setShowDeactivate(null)
       toast('Team member deactivated.')
     } catch(e) { toast('Failed', 'error') }
-    finally { setDeactivating(null) }
+    finally { setDeactivating(false) }
   }
 
   return (
@@ -140,12 +134,11 @@ export default function Team() {
       <div className="flex items-start justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-black">Team</h1>
-          <p className="text-sm text-slate-500 mt-0.5">{members.length} active team member{members.length !== 1 ? 's' : ''}</p>
+          <p className="text-sm text-slate-500 mt-0.5">{currentChurchName()} · {members.length} active member{members.length !== 1 ? 's' : ''}</p>
         </div>
         <Btn onClick={() => setShowAdd(true)}><Plus size={13} />Add Team Member</Btn>
       </div>
 
-      {/* Role legend */}
       <div className="bg-white border border-slate-200 rounded-lg p-4 mb-6">
         <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Role Permissions</div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -159,9 +152,8 @@ export default function Team() {
       </div>
 
       {loading ? <div className="flex justify-center py-12"><Spinner dark /></div>
-        : members.length === 0 ? (
-          <EmptyState icon="👥" title="No team members yet" subtitle="Add your first team member to get started." />
-        ) : (
+        : members.length === 0 ? <EmptyState icon="👥" title="No team members yet" subtitle="Add your first team member." />
+        : (
           <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <table className="w-full text-sm border-collapse">
               <thead>
@@ -180,7 +172,7 @@ export default function Team() {
                         <div>
                           <div className="font-medium text-black text-sm flex items-center gap-1.5">
                             {m.name}
-                            {m.id === me?.id && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">You</span>}
+                            {m.email === me?.email && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded">You</span>}
                           </div>
                           <div className="text-xs text-slate-400">{m.email}</div>
                         </div>
@@ -188,13 +180,13 @@ export default function Team() {
                     </td>
                     <td className="px-4 py-3"><RoleBadge role={m.role} /></td>
                     <td className="px-4 py-3 text-xs text-slate-400">
-                      {m.lastLoginAt?.toDate?.()?.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) || 'Never'}
+                      {m.lastLoginAt?.toDate?.()?.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) || 'Never'}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5 justify-end">
-                        <IconBtn onClick={() => setEditMember(m)} title="Edit"><Pencil size={13} /></IconBtn>
-                        {m.id !== me?.id && (
-                          <IconBtn danger onClick={() => setShowDeactivate(m)} title="Deactivate"><UserX size={13} /></IconBtn>
+                        <IconBtn onClick={() => setEditMember(m)}><Pencil size={13} /></IconBtn>
+                        {m.email !== me?.email && (
+                          <IconBtn danger onClick={() => setShowDeactivate(m)}><UserX size={13} /></IconBtn>
                         )}
                       </div>
                     </td>
@@ -205,13 +197,13 @@ export default function Team() {
           </div>
         )}
 
-      <MemberModal show={showAdd || !!editMember} onClose={() => { setShowAdd(false); setEditMember(null) }} member={editMember} onSaved={load} />
-
+      <MemberModal show={showAdd || !!editMember} onClose={() => { setShowAdd(false); setEditMember(null) }}
+        member={editMember} onSaved={load} churchId={churchId} />
       <Modal show={!!showDeactivate} onClose={() => setShowDeactivate(null)} title="Deactivate Team Member?"
-        subtitle={`${showDeactivate?.name} will no longer be able to log in. You can re-add them later if needed.`}
+        subtitle={`${showDeactivate?.name} will no longer be able to log in.`}
         actions={[
           <Btn key="c" variant="secondary" onClick={() => setShowDeactivate(null)}>Cancel</Btn>,
-          <Btn key="d" variant="danger" onClick={doDeactivate} disabled={!!deactivating}>
+          <Btn key="d" variant="danger" onClick={doDeactivate} disabled={deactivating}>
             {deactivating ? 'Deactivating...' : 'Deactivate'}
           </Btn>
         ]} />

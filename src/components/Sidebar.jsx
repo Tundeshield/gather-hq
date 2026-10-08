@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { logout, currentUser, isSuperAdmin, hasRole } from '../auth'
+import { logout, currentUser, isSuperAdmin, hasRole, currentChurchName } from '../auth'
 import { LayoutDashboard, CalendarCheck, Users, MessageSquare, DollarSign, LogOut, Menu, X, CalendarRange, UserCog } from 'lucide-react'
 import { useState } from 'react'
 
@@ -31,7 +31,7 @@ export default function Sidebar() {
     <div className="flex flex-col h-full">
       <div className="px-5 py-5 border-b border-slate-100">
         <div className="text-lg font-bold text-black tracking-tight">GatherHQ</div>
-        <div className="text-xs text-slate-400 mt-0.5">Church Management</div>
+        <div className="text-xs text-slate-400 mt-0.5">{currentChurchName()}</div>
       </div>
       <nav className="flex-1 py-3 overflow-y-auto scrollbar-hide">
         <div className="px-5 py-2 text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Main</div>

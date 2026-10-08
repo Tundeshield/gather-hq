@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchDoc } from '../db'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
 import FormBuilder, { SESSION_PRESETS, EVENT_PRESETS } from '../components/FormBuilder'
 import { Btn, Spinner } from '../components/UI'
@@ -21,7 +22,7 @@ export default function BuilderPage() {
   const colName = mode === 'event' ? 'events' : 'sessions'
 
   useEffect(() => {
-    getDoc(doc(db, colName, id)).then(snap => {
+    getDoc(churchDoc(colName, id)).then(snap => {
       if (snap.exists()) {
         const data = snap.data()
         setRecord(data)
@@ -39,7 +40,7 @@ export default function BuilderPage() {
     }
     setSaving(true)
     try {
-      await updateDoc(doc(db, colName, id), { fields })
+      await updateDoc(churchDoc(colName, id), { fields })
       toast('Form saved!')
       navigate(mode === 'event' ? '/events/' + id : '/attendance/' + id)
     } catch(e) { toast('Save failed: ' + e.message, 'error') }

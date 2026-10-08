@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { login, isLoggedIn, getLockoutRemaining, bootstrapSuperAdmin } from '../auth'
+import { login, isLoggedIn, getLockoutRemaining, bootstrapPlatformAdmin, isPlatformAdmin } from '../auth'
 import { Spinner } from '../components/UI'
 
 export default function Login() {
@@ -15,9 +15,11 @@ export default function Login() {
   const timerRef = useRef(null)
 
   useEffect(() => {
-    if (isLoggedIn()) { navigate('/dashboard'); return }
-    // Bootstrap super admin on first visit
-    bootstrapSuperAdmin().then(() => setBootstrapping(false)).catch(() => setBootstrapping(false))
+    if (isLoggedIn()) {
+      navigate(isPlatformAdmin() ? '/platform' : '/dashboard')
+      return
+    }
+    bootstrapPlatformAdmin().finally(() => setBootstrapping(false))
     const rem = getLockoutRemaining()
     if (rem > 0) startLockCountdown(rem)
     return () => clearInterval(timerRef.current)
@@ -44,24 +46,20 @@ export default function Login() {
     setLoading(false)
 
     if (result.success) {
-      // Route based on role
-      if (result.user.role === 'usher') navigate('/checkin-select')
+      if (result.user.role === 'platform_admin') navigate('/platform')
+      else if (result.user.role === 'usher') navigate('/checkin-select')
       else navigate('/dashboard')
     } else if (result.locked) {
       startLockCountdown(result.remaining)
-      doShake()
-      setPassword('')
+      doShake(); setPassword('')
     } else if (result.error) {
-      setError(result.error)
-      doShake()
-      setPassword('')
+      setError(result.error); doShake(); setPassword('')
     } else {
       const r = result.attemptsLeft
       setError(r !== undefined
         ? (r === 3 ? 'Incorrect email or password.' : `Incorrect — ${r} attempt${r > 1 ? 's' : ''} remaining.`)
         : 'Incorrect email or password.')
-      doShake()
-      setPassword('')
+      doShake(); setPassword('')
     }
   }
 
@@ -69,9 +67,7 @@ export default function Login() {
   const lockSecs = Math.floor((lockRemaining % 60000) / 1000)
 
   if (bootstrapping) return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-      <Spinner dark />
-    </div>
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Spinner dark /></div>
   )
 
   return (
@@ -90,7 +86,7 @@ export default function Login() {
         ) : (
           <>
             <div className="text-2xl font-bold text-black mb-1">GatherHQ</div>
-            <div className="text-sm text-slate-500 mb-7">The Elevation Church — Sign in to continue</div>
+            <div className="text-sm text-slate-500 mb-7">Sign in to your branch</div>
             <form onSubmit={handleSubmit}>
               <div className="mb-3.5">
                 <label className="block text-sm font-medium text-black mb-1.5">Email</label>
@@ -111,7 +107,7 @@ export default function Login() {
               </button>
             </form>
             <div className="mt-5 p-3 bg-slate-50 rounded-lg text-xs text-slate-400 text-center">
-              First time? Use the default credentials your admin set up for you.
+              Each branch has its own login. Use the credentials your admin set up for you.
             </div>
           </>
         )}

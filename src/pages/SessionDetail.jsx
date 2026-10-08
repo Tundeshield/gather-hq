@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchDoc, subCol, subDoc } from '../db'
 import { doc, getDoc, updateDoc, collection, onSnapshot, query, orderBy } from 'firebase/firestore'
 import * as XLSX from 'xlsx'
 import { Badge, Btn, Spinner, EmptyState } from '../components/UI'
@@ -22,12 +23,12 @@ export default function SessionDetail() {
   const [toggling, setToggling] = useState(false)
 
   useEffect(() => {
-    getDoc(doc(db, 'sessions', id)).then(snap => {
+    getDoc(churchDoc('sessions', id)).then(snap => {
       if (snap.exists()) setSession({ id: snap.id, ...snap.data() })
       setLoading(false)
     })
     const unsub = onSnapshot(
-      query(collection(db, 'sessions', id, 'submissions'), orderBy('createdAt', 'desc')),
+      query(subCol('sessions', id, 'submissions'), orderBy('createdAt', 'desc')),
       snap => setSubmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     )
     return () => unsub()
@@ -37,7 +38,7 @@ export default function SessionDetail() {
     if (!session) return
     setToggling(true)
     const newStatus = session.status === 'active' ? 'closed' : 'active'
-    await updateDoc(doc(db, 'sessions', id), { status: newStatus })
+    await updateDoc(churchDoc('sessions', id), { status: newStatus })
     setSession(prev => ({ ...prev, status: newStatus }))
     setToggling(false)
     toast(newStatus === 'active' ? 'Session reopened.' : 'Session closed.')

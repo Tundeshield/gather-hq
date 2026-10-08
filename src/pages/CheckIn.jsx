@@ -1,11 +1,11 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { db } from '../firebase'
 import {
   doc, getDoc, updateDoc, addDoc,
   collection, query, where, getDocs, serverTimestamp, increment
 } from 'firebase/firestore'
 import { Spinner } from '../components/UI'
+import { findSessionById, findEventById, submissionsCol, registrationsCol, membersCol, memberDocRef } from '../publicDb'
 import { normalizePhone } from '../utils'
 
 // ── FIELD INPUT ────────────────────────────────────────────────
@@ -56,10 +56,10 @@ export default function CheckIn() {
 
   async function loadRecord() {
     // Try session first, then event
-    let snap = await getDoc(doc(db, 'sessions', id)).catch(() => null)
-    if (snap?.exists()) { setRecord({ id: snap.id, ...snap.data() }); setRecordType('session'); setLoading(false); return }
-    snap = await getDoc(doc(db, 'events', id)).catch(() => null)
-    if (snap?.exists()) { setRecord({ id: snap.id, ...snap.data() }); setRecordType('event'); setLoading(false); return }
+    let data = await findSessionById(id).catch(() => null)
+    if (data) { setRecord(data); setRecordType('session'); setLoading(false); return }
+    data = await findEventById(id).catch(() => null)
+    if (data) { setRecord(data); setRecordType('event'); setLoading(false); return }
     setLoading(false)
   }
 
@@ -90,7 +90,7 @@ export default function CheckIn() {
   async function handleSessionCheckin(p) {
     // Check if already checked in today
     const existingSub = await getDocs(query(
-      collection(db, 'sessions', id, 'submissions'),
+      submissionsCol(record.churchId, id),
       where('phone', '==', p)
     ))
     if (!existingSub.empty) {
@@ -103,7 +103,7 @@ export default function CheckIn() {
     }
 
     // Look up in member directory
-    const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
+    const memberSnap = await getDocs(query(membersCol(record.churchId), where('phone', '==', p)))
     if (!memberSnap.empty) {
       const member = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
       setFoundMember(member)
@@ -121,12 +121,12 @@ export default function CheckIn() {
   async function recordSessionCheckin(p, name, memberId) {
     const data = { name: name || '', phone: p }
     // Add any extra fields from session
-    await addDoc(collection(db, 'sessions', id, 'submissions'), {
+    await addDoc(submissionsCol(record.churchId, id), {
       data, phone: p, createdAt: serverTimestamp()
     })
     // Update member stats
     if (memberId) {
-      await updateDoc(doc(db, 'members', memberId), {
+      await updateDoc(memberDocRef(record.churchId, memberId), {
         lastSeenAt: serverTimestamp(),
         totalAttendance: increment(1)
       })
@@ -141,7 +141,7 @@ export default function CheckIn() {
     setSubmitting(true)
     try {
       // Add to member directory
-      const memberRef = await addDoc(collection(db, 'members'), {
+      const memberRef = await addDoc(membersCol(record.churchId), {
         name: newForm.name.trim(),
         phone: p,
         email: newForm.email.trim(),
@@ -150,7 +150,7 @@ export default function CheckIn() {
         createdAt: serverTimestamp()
       })
       // Record attendance
-      await addDoc(collection(db, 'sessions', id, 'submissions'), {
+      await addDoc(submissionsCol(record.churchId, id), {
         data: { name: newForm.name.trim(), phone: p, email: newForm.email.trim() },
         phone: p,
         createdAt: serverTimestamp()
@@ -166,7 +166,7 @@ export default function CheckIn() {
   async function handleEventCheckin(p) {
     // 1. Check registrations subcollection first
     const regSnap = await getDocs(query(
-      collection(db, 'events', id, 'registrations'),
+      registrationsCol(record.churchId, id),
       where('phone', '==', p)
     ))
 
@@ -179,7 +179,7 @@ export default function CheckIn() {
         setTimeout(() => resetToPhone(), 3000)
         return
       }
-      await updateDoc(doc(db, 'events', id, 'registrations', reg.id), {
+      await updateDoc(doc(registrationsCol(record.churchId, id), reg.id), {
         checkedIn: true, checkedInAt: serverTimestamp()
       })
       setFoundMember({ name: reg.name || 'there' })
@@ -189,11 +189,11 @@ export default function CheckIn() {
     }
 
     // 2. Not in registrations — check members directory
-    const memberSnap = await getDocs(query(collection(db, 'members'), where('phone', '==', p)))
+    const memberSnap = await getDocs(query(membersCol(record.churchId), where('phone', '==', p)))
     if (!memberSnap.empty) {
       const member = { id: memberSnap.docs[0].id, ...memberSnap.docs[0].data() }
       // Auto-register and check them in as late registrant
-      await addDoc(collection(db, 'events', id, 'registrations'), {
+      await addDoc(registrationsCol(record.churchId, id), {
         phone: p,
         name: member.name,
         data: { 'Full Name': member.name, 'Phone Number': p, 'Email Address': member.email || '' },
@@ -203,7 +203,7 @@ export default function CheckIn() {
         createdAt: serverTimestamp()
       })
       // Update member stats
-      await updateDoc(doc(db, 'members', member.id), {
+      await updateDoc(memberDocRef(record.churchId, member.id), {
         lastSeenAt: serverTimestamp(),
         totalAttendance: increment(1)
       })
@@ -225,7 +225,7 @@ export default function CheckIn() {
     const p = normalizePhone(phone)
     setSubmitting(true)
     try {
-      await addDoc(collection(db, 'events', id, 'registrations'), {
+      await addDoc(registrationsCol(record.churchId, id), {
         phone: p,
         name: newForm.name.trim(),
         data: { 'Full Name': newForm.name.trim(), 'Phone Number': p, 'Email Address': newForm.email.trim() },

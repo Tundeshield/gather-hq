@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { db } from '../firebase'
+import { churchCol, churchDoc } from '../db'
 import {
   collection, getDocs, addDoc, updateDoc, deleteDoc,
   doc, query, orderBy, serverTimestamp, writeBatch
@@ -377,7 +378,7 @@ export default function Members() {
   async function deleteAllMembers() {
     setDeletingAll(true)
     try {
-      const snap = await getDocs(collection(db, 'members'))
+      const snap = await getDocs(churchCol('members'))
       const batches = []
       let batch = writeBatch(db)
       let count = 0

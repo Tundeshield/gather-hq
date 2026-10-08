@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { db } from '../firebase'
-import { doc, getDoc, addDoc, collection, query, where, getDocs, serverTimestamp } from 'firebase/firestore'
+import { query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore'
 import { Spinner } from '../components/UI'
+import { findEventById, registrationsCol } from '../publicDb'
 
 function FieldInput({ field, value, onChange }) {
   const base = 'w-full border border-slate-200 rounded-lg px-3 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 transition-all'
@@ -35,8 +35,8 @@ export default function Register() {
   const [phone, setPhone] = useState('')
 
   useEffect(() => {
-    getDoc(doc(db, 'events', id)).then(snap => {
-      if (snap.exists()) setEvent({ id: snap.id, ...snap.data() })
+    findEventById(id).then(data => {
+      if (data) setEvent(data)
       setLoading(false)
     })
   }, [id])
@@ -56,12 +56,12 @@ export default function Register() {
     setSubmitting(true)
     try {
       // Check if already registered
-      const existing = await getDocs(query(collection(db, 'events', id, 'registrations'), where('phone', '==', phone)))
+      const existing = await getDocs(query(registrationsCol(event.churchId, id), where('phone', '==', phone)))
       if (!existing.empty) { setDone(true); setPhone(phone); return }
       const data = {}
       const name = event.fields.find(f => f.label.toLowerCase().includes('name'))
       event.fields.forEach(f => { data[f.label] = values[f.id] || '' })
-      await addDoc(collection(db, 'events', id, 'registrations'), {
+      await addDoc(registrationsCol(event.churchId, id), {
         phone, name: name ? values[name.id] || '' : '', data, checkedIn: false, isLateRegistrant: false, createdAt: serverTimestamp()
       })
       setDone(true)

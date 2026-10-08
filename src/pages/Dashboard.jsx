@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchCol, churchDoc, subCol } from '../db'
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore'
 import { StatCard, Badge, EmptyState, Spinner } from '../components/UI'
 import { LogOut } from 'lucide-react'
@@ -17,15 +18,15 @@ export default function Dashboard() {
   async function load() {
     try {
       const [sessSnap, evtSnap] = await Promise.all([
-        getDocs(query(collection(db, 'sessions'), orderBy('createdAt', 'desc'))),
-        getDocs(query(collection(db, 'events'), orderBy('createdAt', 'desc')))
+        getDocs(query(churchCol('sessions'), orderBy('createdAt', 'desc'))),
+        getDocs(query(churchCol('events'), orderBy('createdAt', 'desc')))
       ])
       const sessions = sessSnap.docs.map(d => ({ id: d.id, ...d.data() }))
       const today = new Date().toISOString().split('T')[0]
       let todayCount = 0
       const counts = {}
       await Promise.all(sessions.slice(0, 10).map(async s => {
-        const sub = await getDocs(collection(db, 'sessions', s.id, 'submissions'))
+        const sub = await getDocs(subCol('sessions', s.id, 'submissions'))
         counts[s.id] = sub.size
         if (s.date === today) todayCount += sub.size
       }))

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
+import { churchCol, churchDoc, subCol } from '../db'
 import { collection, getDocs, addDoc, deleteDoc, doc, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import { StatCard, Badge, Btn, Input, Textarea, EmptyState, Spinner, IconBtn } from '../components/UI'
 import Modal from '../components/Modal'
@@ -23,12 +24,12 @@ export default function Events() {
   async function load() {
     setLoading(true)
     try {
-      const snap = await getDocs(query(collection(db, 'events'), orderBy('createdAt', 'desc')))
+      const snap = await getDocs(query(churchCol('events'), orderBy('createdAt', 'desc')))
       const evts = snap.docs.map(d => ({ id: d.id, ...d.data() }))
       setEvents(evts)
       const c = {}
       await Promise.all(evts.map(async e => {
-        const sub = await getDocs(collection(db, 'events', e.id, 'registrations'))
+        const sub = await getDocs(subCol('events', e.id, 'registrations'))
         c[e.id] = sub.size
       }))
       setCounts(c)
@@ -46,7 +47,7 @@ export default function Events() {
       if (form.startTime) payload.startTime = form.startTime
       if (form.endTime) payload.endTime = form.endTime
       if (form.description) payload.description = form.description
-      const ref = await addDoc(collection(db, 'events'), payload)
+      const ref = await addDoc(churchCol('events'), payload)
       setShowCreate(false)
       setForm({ name: '', date: new Date().toISOString().split('T')[0], venue: '', startTime: '', endTime: '', description: '' })
       toast('Event created!')
@@ -57,7 +58,7 @@ export default function Events() {
 
   async function deleteEvent(id) {
     try {
-      await deleteDoc(doc(db, 'events', id))
+      await deleteDoc(churchDoc('events', id))
       setEvents(prev => prev.filter(e => e.id !== id))
       setShowDelete(null)
       toast('Event deleted.')
