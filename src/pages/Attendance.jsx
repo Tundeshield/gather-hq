@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { db } from '../firebase'
 import { churchCol, churchDoc, subCol } from '../db'
+import { getSession } from '../auth'
 import { collection, getDocs, addDoc, deleteDoc, doc, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import { StatCard, Badge, Btn, Input, Textarea, EmptyState, Spinner, IconBtn } from '../components/UI'
 import Modal from '../components/Modal'
@@ -48,6 +49,7 @@ export default function Attendance() {
         description: form.description.trim(),
         status: 'active',
         fields: [],
+        churchName: getSession()?.churchName || '',
         createdAt: serverTimestamp()
       })
       setShowCreate(false)

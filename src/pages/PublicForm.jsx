@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams } from 'react-router-dom'
-import { query, where, getDocs, serverTimestamp, increment } from 'firebase/firestore'
+import { query, where, getDocs, addDoc, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
 import { normalizePhone } from '../utils'
 import { findSessionById, submissionsCol, membersCol, memberDocRef } from '../publicDb'
 import { Spinner } from '../components/UI'
@@ -41,10 +41,10 @@ export default function PublicForm() {
   const phoneRef = useRef()
 
   useEffect(() => {
-    findSessionById(id).then(data => {
-      if (data) setSession(data)
-      setLoading(false)
-    })
+    findSessionById(id)
+      .then(data => { if (data) setSession(data) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
   }, [id])
 
   useEffect(() => {
@@ -191,7 +191,7 @@ export default function PublicForm() {
   return (
     <div className="min-h-screen bg-slate-50">
       <div className="bg-white border-b border-slate-200 px-5 py-3 sticky top-0 z-10">
-        <div className="text-xs text-slate-400">The Elevation Church — Attendance</div>
+        <div className="text-xs text-slate-400">{session.churchName || 'GatherHQ'} — Attendance</div>
         <div className="text-base font-semibold text-black">{session.name}</div>
       </div>
 

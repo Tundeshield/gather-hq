@@ -6,11 +6,6 @@ import { db } from './firebase'
 import { collection, collectionGroup, doc, query, where, getDocs, getDoc } from 'firebase/firestore'
 
 export async function findSessionById(sessionId) {
-  // Direct path lookup — session ID is globally unique
-  // Try to find which church owns this session
-  const snap = await getDocs(query(collectionGroup(db, 'sessions'), where('__name__', '>=', ''), ))
-  // Better: store churchId in session doc and look it up
-  // We use collectionGroup to find the session across all churches
   const results = await getDocs(collectionGroup(db, 'sessions'))
   const match = results.docs.find(d => d.id === sessionId)
   if (!match) return null
