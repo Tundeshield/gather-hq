@@ -87,15 +87,21 @@ export default function PublicForm() {
     finally { setLooking(false) }
   }
 
-  async function recordAttendance(p, name, memberId) {
+  async function recordAttendance(p, name, memberId, extraData) {
     const data = {}
-    // Fill session fields from member data
+    // Fill session fields — use extraData when provided, otherwise best-guess from name/phone
     const fields = session?.fields || []
     fields.forEach(f => {
       const fl = f.label.toLowerCase()
-      if (fl.includes('name')) data[f.label] = name || ''
-      else if (fl.includes('phone')) data[f.label] = p
-      else data[f.label] = ''
+      if (extraData && f.label in extraData) {
+        data[f.label] = extraData[f.label]
+      } else if (fl.includes('name')) {
+        data[f.label] = name || ''
+      } else if (fl.includes('phone') || f.type === 'phone') {
+        data[f.label] = p
+      } else {
+        data[f.label] = ''
+      }
     })
     await addDoc(submissionsCol(session.churchId, id), {
       data, phone: p, createdAt: serverTimestamp()
@@ -158,7 +164,7 @@ export default function PublicForm() {
         lastSeenAt: serverTimestamp(),
         createdAt: serverTimestamp()
       })
-      await recordAttendance(p, name.trim(), memberRef.id)
+      await recordAttendance(p, name.trim(), memberRef.id, data)
       setMember({ name: name.trim() })
       setPhase('welcome')
       setTimeout(() => resetToPhone(), 3500)
