@@ -176,13 +176,13 @@ function ImportModal({ show, onClose, onImported }) {
       sex: si>=0?cleanOptional(r[si]):'',
       unit: ui>=0?cleanOptional(r[ui]):'',
     })).filter(m=>m.name&&m.phone)
-    const existingSnap = await getDocs(collection(db,'members'))
+    const existingSnap = await getDocs(churchCol('members'))
     const existingPhones = new Set(existingSnap.docs.map(d=>d.data().phone))
     let imported=0, skipped=0
     for (let i=0;i<members.length;i++) {
       const m=members[i]; setProgress(Math.round((i/members.length)*100))
       if (existingPhones.has(m.phone)) { skipped++; continue }
-      try { await addDoc(collection(db,'members'),{...m,totalAttendance:0,createdAt:serverTimestamp()}); imported++ }
+      try { await addDoc(churchCol('members'),{...m,totalAttendance:0,createdAt:serverTimestamp()}); imported++ }
       catch(e) { skipped++ }
     }
     setImporting(false)
@@ -298,8 +298,8 @@ function MemberModal({ show, onClose, member, onSaved }) {
     setSaving(true)
     try {
       const data={name:form.name.trim(),phone:normalizePhone(form.phone),email:form.email.trim(),sex:form.sex,unit:form.unit}
-      if (member){await updateDoc(doc(db,'members',member.id),data);toast('Member updated.')}
-      else{await addDoc(collection(db,'members'),{...data,totalAttendance:0,createdAt:serverTimestamp()});toast('Member added.')}
+      if (member){await updateDoc(churchDoc('members',member.id),data);toast('Member updated.')}
+      else{await addDoc(churchCol('members'),{...data,totalAttendance:0,createdAt:serverTimestamp()});toast('Member added.')}
       onSaved();onClose()
     }catch(e){toast('Save failed: '+e.message,'error')}
     finally{setSaving(false)}
@@ -358,7 +358,7 @@ export default function Members() {
   async function load(){
     setLoading(true)
     try {
-      const snap = await getDocs(query(collection(db,'members'),orderBy('name','asc')))
+      const snap = await getDocs(query(churchCol('members'),orderBy('name','asc')))
       setMembers(snap.docs.map(d=>({id:d.id,...d.data()})))
     }catch(e){toast('Failed to load members','error')}
     finally{setLoading(false)}
@@ -368,7 +368,7 @@ export default function Members() {
     if (!deleteMember) return
     setDeleting(true)
     try {
-      await deleteDoc(doc(db,'members',deleteMember.id))
+      await deleteDoc(deleteMember.ref || churchDoc('members', deleteMember.id))
       setMembers(prev=>prev.filter(m=>m.id!==deleteMember.id))
       setDeleteMember(null); toast('Member removed.')
     }catch(e){toast('Delete failed','error')}
